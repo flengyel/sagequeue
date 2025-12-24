@@ -212,7 +212,7 @@ podman exec -it sagemath bash -lc \
 Optional: verify Sage can instantiate the solver wrapper:
 
 ```bash
-podman exec -it sagemath bash -lc 'cd /sage && ./sage -python - <<'PY'
+podman exec -it sagemath bash -lc 'cd /sage && ./sage -python - <<'"'"'PY'"'"'
 from sage.sat.solvers.satsolver import SAT
 S = SAT(solver="cryptominisat")
 S.add_clause((1,))
@@ -240,10 +240,17 @@ Jupyter URL:
 
 - `http://localhost:8888`
 
-Token extraction:
+Token extraction (note `2>&1`, because Jupyter token lines may appear on stderr in `podman logs` output):
 
 ```bash
-podman logs sagemath | grep -Eo 'token=[0-9a-f]+' | tail -n 1
+podman logs --tail 2000 sagemath 2>&1 | grep -Eo 'token=[0-9a-f]+' | tail -n 1
+```
+
+URL with token:
+
+```bash
+TOKEN="$(podman logs --tail 2000 sagemath 2>&1 | grep -Eo 'token=[0-9a-f]+' | tail -n 1)"
+echo "http://localhost:8888/tree?${TOKEN}"
 ```
 
 ## License

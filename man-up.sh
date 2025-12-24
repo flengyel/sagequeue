@@ -77,21 +77,31 @@ mkdir -p "$HOME/Jupyter" "$HOME/.jupyter"
 "$PODMAN_COMPOSE" -f "${COMPOSE_FILE}" up -d
 
 echo
-echo "Jupyter (Windows browser): http://localhost:${PORT}"
 
-# Best-effort token extraction (non-fatal if it isn't present yet).
-TOKEN="$(podman logs "${CONTAINER_NAME}" 2>/dev/null | grep -Eo 'token=[0-9a-f]+' | tail -n 1 || true)"
+# Best-effort token extraction (wait up to ~30s for Jupyter to print it)
+TOKEN=""
+for _ in {1..30}; do
+  TOKEN="$(podman logs --tail 2000 "${CONTAINER_NAME}" 2>&1 \
+            | grep -Eo 'token=[0-9a-f]+' \
+            | tail -n 1 || true)"
+  [[ -n "${TOKEN}" ]] && break
+  sleep 1
+done
+
 if [[ -n "${TOKEN}" ]]; then
   echo "Token (if needed): ${TOKEN}"
+  echo "URL (with token): http://localhost:${PORT}/tree?${TOKEN}"
 else
-  echo "Token (if needed): podman logs ${CONTAINER_NAME} | grep -Eo 'token=[0-9a-f]+' | tail -n 1"
+  echo "Token (if needed): podman logs --tail 2000 ${CONTAINER_NAME} 2>&1 | grep -Eo 'token=[0-9a-f]+' | tail -n 1"
 fi
+
 
 if [[ "${OPEN}" == "1" ]]; then
   if command -v powershell.exe >/dev/null 2>&1; then
     powershell.exe -NoProfile -Command "Start-Process 'http://localhost:${PORT}'" >/dev/null 2>&1 || true
   fi
 fi
+
 
 if [[ "${FOLLOW}" == "1" ]]; then
   exec podman logs -f "${CONTAINER_NAME}"
