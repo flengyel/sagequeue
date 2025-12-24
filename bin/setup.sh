@@ -29,6 +29,10 @@ DIR_LOCAL="${HOME}/.sagequeue-local"
 DIR_CONFIG="${HOME}/.sagequeue-config"
 DIR_CACHE="${HOME}/.sagequeue-cache"
 
+# var subdirectory
+DIR_VAR="${REPO_ROOT}/var"
+
+
 FIX_PERMS="${FIX_PERMS:-1}"          # 1=run bin/fix-bind-mounts.sh; 0=skip
 DO_COMPOSE_UP="${DO_COMPOSE_UP:-1}"  # 1=podman-compose up -d; 0=skip
 DO_LINGER="${DO_LINGER:-1}"          # 1=enable linger; 0=skip
@@ -170,26 +174,39 @@ else
   warn "systemctl --user is not usable in this session. Queue services will not work until this is fixed."
 fi
 
-step "1) Create bind-mount directories"
-ensure_dir "$NOTEBOOKS_HOST"
-ensure_dir "$DIR_JUPYTER"
-ensure_dir "$DIR_DOT_SAGE"
-ensure_dir "$DIR_LOCAL"
-ensure_dir "$DIR_CONFIG"
-ensure_dir "$DIR_CACHE"
+step "1) Create required directories"
 
-ensure_mode_700 "$DIR_DOT_SAGE"
-ensure_mode_700 "$DIR_LOCAL"
-ensure_mode_700 "$DIR_CONFIG"
-ensure_mode_700 "$DIR_CACHE"
+DIRS_TO_CREATE=(
+  "$NOTEBOOKS_HOST"
+  "$DIR_JUPYTER"
+  "$DIR_DOT_SAGE"
+  "$DIR_LOCAL"
+  "$DIR_CONFIG"
+  "$DIR_CACHE"
+  "$DIR_VAR"          # repo runtime state (var/<JOBSET>/...)
+)
 
-log "[ok] host dirs ensured:"
-log "  ${NOTEBOOKS_HOST}"
-log "  ${DIR_JUPYTER}"
-log "  ${DIR_DOT_SAGE}"
-log "  ${DIR_LOCAL}"
-log "  ${DIR_CONFIG}"
-log "  ${DIR_CACHE}"
+for d in "${DIRS_TO_CREATE[@]}"; do
+  ensure_dir "$d"
+done
+
+SECURE_DIRS=(
+  "$DIR_DOT_SAGE"
+  "$DIR_LOCAL"
+  "$DIR_CONFIG"
+  "$DIR_CACHE"
+)
+
+for d in "${SECURE_DIRS[@]}"; do
+  ensure_mode_700 "$d"
+done
+
+log "[ok] directories ensured:"
+for d in "${DIRS_TO_CREATE[@]}"; do
+  log "  ${d}"
+done
+
+
 
 step "2) Verify Sage script exists in ${NOTEBOOKS_HOST}"
 [[ -f "$SAGE_SCRIPT_HOST" ]] || die "Missing expected Sage script: ${SAGE_SCRIPT_HOST}"
