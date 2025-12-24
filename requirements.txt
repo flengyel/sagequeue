@@ -1,0 +1,2 @@
+# Install podman-compose into .venv (used by man-up.sh/man-down.sh in typical setups)
+podman-compose

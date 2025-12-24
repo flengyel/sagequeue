@@ -1,0 +1,21 @@
+[Unit]
+Description=SageQueue worker %i
+After=sagequeue-container.service
+Requires=sagequeue-container.service
+
+[Service]
+Type=simple
+EnvironmentFile=%h/.config/sagequeue/sagequeue.env
+
+# Requeue orphans before starting (safe: recover uses flock)
+ExecStartPre=/usr/bin/env bash -lc '$PROJECT_ROOT/bin/sagequeue-recover.sh'
+
+ExecStart=/usr/bin/env bash -lc '$PROJECT_ROOT/bin/sagequeue-worker.sh %i'
+Restart=always
+RestartSec=2
+KillSignal=SIGTERM
+TimeoutStopSec=30
+
+[Install]
+WantedBy=default.target
+

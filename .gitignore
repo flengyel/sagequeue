@@ -1,0 +1,18 @@
+# runtime state (queue + logs)
+var/
+
+# local virtual environment
+.venv/
+
+# editor / OS noise
+.vscode/
+.DS_Store
+Thumbs.db
+
+# swap/backup files
+*.swp
+*~
+
+# Python caches (if any tooling scripts are added later)
+__pycache__/
+*.pyc

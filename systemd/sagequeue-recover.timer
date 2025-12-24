@@ -1,0 +1,12 @@
+[Unit]
+Description=SageQueue: periodic orphan recovery
+
+[Timer]
+OnBootSec=2min
+OnUnitActiveSec=5min
+Unit=sagequeue-recover.service
+Persistent=true
+
+[Install]
+WantedBy=timers.target
+

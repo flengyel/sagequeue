@@ -1,0 +1,8 @@
+[Unit]
+Description=SageQueue: requeue orphaned running jobs
+
+[Service]
+Type=oneshot
+EnvironmentFile=%h/.config/sagequeue/sagequeue.env
+ExecStart=/usr/bin/env bash -lc '$PROJECT_ROOT/bin/sagequeue-recover.sh'
+

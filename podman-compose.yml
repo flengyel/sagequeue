@@ -1,0 +1,44 @@
+version: "3.8"
+
+services:
+  sagemath:
+    image: ghcr.io/sagemath/sage/sage-debian-bullseye-standard-with-targets-optional:${SAGE_TAG:-10.7}
+    # For the DockerHub runtime image instead, you would typically use:
+    # image: docker.io/sagemath/sagemath:${SAGE_TAG:-10.7}
+    container_name: sagemath
+
+    working_dir: /sage
+
+    # If this still causes trouble, REMOVE this line and let the image pick its default user.
+    user: "1000:1000"
+
+    ports:
+      - "8888:8888"
+
+    environment:
+      - HOME=/home/sage
+      - DOT_SAGE=/home/sage/.sage
+
+      # Force Jupyter + friends to use writable XDG locations
+      - XDG_DATA_HOME=/home/sage/.local/share
+      - XDG_CONFIG_HOME=/home/sage/.config
+      - XDG_CACHE_HOME=/home/sage/.cache
+      - JUPYTER_RUNTIME_DIR=/home/sage/.local/share/jupyter/runtime
+
+    command:
+      - bash
+      - -lc
+      - >
+        mkdir -p /home/sage/.local/share/jupyter/runtime /home/sage/.config /home/sage/.cache &&
+        exec ./sage -n jupyter --no-browser --ip=0.0.0.0 --port=8888 --notebook-dir=/home/sage/notebooks
+
+    volumes:
+      - ${HOME}/Jupyter:/home/sage/notebooks:Z,U
+      - ${HOME}/.jupyter:/home/sage/.jupyter:Z,U
+      - ${HOME}/.sagequeue-dot_sage:/home/sage/.sage:Z,U
+
+      # NEW: make these writable via bind mounts
+      - ${HOME}/.sagequeue-local:/home/sage/.local:Z,U
+      - ${HOME}/.sagequeue-config:/home/sage/.config:Z,U
+      - ${HOME}/.sagequeue-cache:/home/sage/.cache:Z,U
+
