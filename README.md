@@ -212,25 +212,17 @@ stateDiagram-v2
   state "done/" as D
   state "failed/" as F
 
-  note left of P
-    var/&lt;JOBSET&gt;/queue/pending
-  end note
-  note left of R
-    var/&lt;JOBSET&gt;/queue/running
-  end note
-  note below of D
-    var/&lt;JOBSET&gt;/queue/done
-  end note
-  note below of F
-    var/&lt;JOBSET&gt;/queue/failed
-  end note
+  note left of P: var/{JOBSET}/queue/pending
+  note left of R: var/{JOBSET}/queue/running
+  note right of D: var/{JOBSET}/queue/done
+  note right of F: var/{JOBSET}/queue/failed
 
-  [*] --> P: enqueue-stride (create *.env)
-  P --> R: claim (mv pending→running) + write *.owner
-  R --> D: rc==0 (mv running→done)
-  R --> F: rc!=0 (mv running→failed)
-  F --> P: retry-failed (mv failed→pending)
-  R --> P: recovery/orphan (mv running→pending) + remove *.owner
+  [*] --> P: enqueue (create *.env)
+  P --> R: claim
+  R --> D: rc==0
+  R --> F: rc!=0
+  F --> P: retry-failed
+  R --> P: recover (orphan)
 ```
 
 
