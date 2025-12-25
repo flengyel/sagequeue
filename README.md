@@ -212,17 +212,17 @@ stateDiagram-v2
   state "done/" as D
   state "failed/" as F
 
-  note right of P
-    var/<JOBSET>/queue/pending
+  note left of P
+    var/&lt;JOBSET&gt;/queue/pending
   end note
-  note right of R
-    var/<JOBSET>/queue/running
+  note left of R
+    var/&lt;JOBSET&gt;/queue/running
   end note
-  note right of D
-    var/<JOBSET>/queue/done
+  note below of D
+    var/&lt;JOBSET&gt;/queue/done
   end note
-  note right of F
-    var/<JOBSET>/queue/failed
+  note below of F
+    var/&lt;JOBSET&gt;/queue/failed
   end note
 
   [*] --> P: enqueue-stride (create *.env)
