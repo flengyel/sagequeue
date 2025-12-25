@@ -2,7 +2,9 @@ version: "3.8"
 
 services:
   sagemath:
-    image: ghcr.io/sagemath/sage/sage-debian-bullseye-standard-with-targets-optional:${SAGE_TAG:-10.7}
+    image: localhost/sagequeue-sagemath:${SAGE_TAG:-10.7}-pycryptosat
+    # The persistent image is derived from the following.
+    # image: ghcr.io/sagemath/sage/sage-debian-bullseye-standard-with-targets-optional:${SAGE_TAG:-10.7}
     # For the DockerHub runtime image instead, you would typically use:
     # image: docker.io/sagemath/sagemath:${SAGE_TAG:-10.7}
     container_name: sagemath

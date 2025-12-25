@@ -18,6 +18,11 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
       build-essential cmake pkg-config \
     && rm -rf /var/lib/apt/lists/*
 
+RUN mkdir -p /home/sage && chown -R 1000:1000 /home/sage
+ENV HOME=/home/sage
+ENV DOT_SAGE=/home/sage/.sage
+
+
 # Build/install pycryptosat inside Sage's Python environment.
 # Run as the normal (uid 1000) user so the installation lands in the expected Sage prefix.
 USER 1000:1000
