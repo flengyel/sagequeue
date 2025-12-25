@@ -35,7 +35,7 @@ UNITS := sagequeue-container.service sagequeue-recover.service sagequeue-recover
 .PHONY: help print-config check setup env install-systemd uninstall-systemd \
         enable disable start stop restart status journal logs progress \
         enqueue-stride enqueue-one retry-failed requeue-running \
-        request-stop clear-stop purge-queue
+        request-stop clear-stop purge-queue diag
 
 help:
 	awk 'BEGIN{FS=":.*##"} /^[a-zA-Z0-9_.-]+:.*##/{printf "  %-20s %s\n", $$1, $$2}' $(MAKEFILE_LIST) | sort
@@ -179,6 +179,9 @@ progress: ## Queue counts.
 	f=$$(find "$(FAILED_DIR)" -maxdepth 1 -type f 2>/dev/null | wc -l | tr -d ' ')
 	t=$$((p+r+d+f))
 	echo "jobset=$(JOBSET) pending=$$p running=$$r done=$$d failed=$$f total=$$t"
+
+diag: ## Diagnostic snapshot (queue + systemd + container + solver procs).
+	ENV_FILE="$(ENV_FILE)" "$(PROJECT_ROOT)/bin/sagequeue-diag.sh"
 
 enqueue-stride: setup clear-stop ## Enqueue OFFSET=0..STRIDE-1 as durable jobs.
 	for ((k=0;k<$(STRIDE);k++)); do \
