@@ -225,6 +225,36 @@ stateDiagram-v2
   R --> P: recover (orphan)
 ```
 
+**Transition meanings (what actually happens on disk):**
+
+- **enqueue (create `*.env`)**  
+  `make … enqueue-stride` writes one job file per offset into `var/{JOBSET}/queue/pending/`, e.g. `shri_r3_off7.env` containing at least `OFFSET=7` (and `ENQUEUED_AT=...`).
+
+- **claim (`pending → running`)**  
+  A worker claims work by an atomic rename:  
+  `mv var/{JOBSET}/queue/pending/<job>.env  var/{JOBSET}/queue/running/<job>.env`  
+  It then writes an owner sidecar file:  
+  `var/{JOBSET}/queue/running/<job>.env.owner` containing:
+  - `OWNER_PID=$$` (host PID of the worker process)
+  - `OWNER_WORKER_ID=<N>`
+  - `OWNER_TS=<timestamp>`
+
+- **rc==0 (`running → done`)**  
+  After `podman exec … ./sage …` exits with status 0, the worker moves:  
+  `mv …/running/<job>.env  …/done/<job>.env`
+
+- **rc!=0 (`running → failed`)**  
+  If Sage exits nonzero (including configuration errors detected by the worker after sourcing the job file), the worker moves:  
+  `mv …/running/<job>.env  …/failed/<job>.env`
+
+- **retry-failed (`failed → pending`)**  
+  `make … retry-failed` moves every `*.env` file from `failed/` back to `pending/` so workers will rerun them.
+
+- **recover (orphan) (`running → pending`)**  
+  Recovery scans `running/*.env` and treats a job as orphaned if its `*.owner` file is missing, cannot be sourced, the recorded `OWNER_PID` is not alive (`kill -0` fails), or that PID is alive but is no longer a `sagequeue-worker.sh` process.  
+  For each orphaned job, recovery removes any stale `*.owner` and moves:  
+  `mv …/running/<job>.env  …/pending/<job>.env`  
+  Recovery is guarded by a global `flock` on `var/{JOBSET}/run/recover.lock` so it is safe to run from multiple workers and from the systemd timer.
 
 
 ### Recovery semantics (what “orphaned running jobs” means)
