@@ -164,6 +164,15 @@ Systemd units source that file at runtime.
 
 ## Queue model
 
+A **jobset** is a named experiment run (graph + rank + solver configuration + stride/worker count) with its own isolated queue and logs.  
+In practice, `JOBSET` is the short identifier used to namespace runtime state under `var/` so multiple experiments do not collide.
+
+- `JOBSET` is set by the selected `config/*.mk` file (e.g. `JOBSET=shri_r3`, `JOBSET=rook_r3`).
+- Switching jobsets changes the `var/<JOBSET>/...` directories and the log prefix, but the worker logic is unchanged.
+
+Example: with `JOBSET=shri_r3`, queue state lives under `var/shri_r3/queue/...` and logs under `var/shri_r3/log/`.
+
+
 On-disk layout per jobset:
 
 - `var/<JOBSET>/queue/pending/`
@@ -173,6 +182,9 @@ On-disk layout per jobset:
 - `var/<JOBSET>/log/`
 - `var/<JOBSET>/run/`
 
+
+### Queue state machine
+
 Each job is a tiny env file (currently `OFFSET=<k>`). Workers:
 
 1. claim a job by atomic move `pending → running`
@@ -180,6 +192,75 @@ Each job is a tiny env file (currently `OFFSET=<k>`). Workers:
    - configured `SAGE_BASE_ARGS`
    - plus injected `--stride STRIDE --offset OFFSET`
 3. move the job file to `done/` or `failed/`
+
+
+The job’s **state** is defined by which directory contains that file:
+
+* `pending/` — eligible to be claimed by a worker
+* `running/` — claimed by a worker (ownership metadata stored in `*.owner`)
+* `done/` — completed successfully (solver exit code 0)
+* `failed/` — completed unsuccessfully (solver exit code nonzero) or malformed job file
+
+State transitions are implemented as filesystem moves (`mv`) within the same jobset directory tree, so claiming work is an atomic `pending → running` move.
+
+```mermaid
+stateDiagram-v2
+  direction LR
+
+  state "pending/\n(var/<JOBSET>/queue/pending)" as P
+  state "running/\n(var/<JOBSET>/queue/running)" as R
+  state "done/\n(var/<JOBSET>/queue/done)" as D
+  state "failed/\n(var/<JOBSET>/queue/failed)" as F
+
+  [*] --> P: enqueue-stride\n(create *.env)
+
+  P --> R: claim\n(worker mv pending→running)\n+ write running/*.owner
+
+  R --> D: rc==0\n(mv running→done)
+  R --> F: rc!=0\n(mv running→failed)
+
+  F --> P: retry-failed\n(mv failed→pending)
+  R --> P: recovery (orphan)\n(mv running→pending)\n+ remove *.owner
+```
+
+### Recovery semantics (what “orphaned running jobs” means)
+
+A job in `running/` is considered *owned* when it has a sibling owner file:
+
+* `running/<job>.env`
+* `running/<job>.env.owner`
+
+When a worker claims a job (`pending → running`), it writes `<job>.env.owner` containing:
+
+* `OWNER_PID=$$` (the worker’s PID on the host)
+* `OWNER_WORKER_ID=<N>`
+* `OWNER_TS=<timestamp>`
+
+The recovery script (`bin/sagequeue-recover.sh`) scans `running/*.env` and treats a job as **orphaned** if **any** of the following is true:
+
+1. the `.owner` file is missing, or
+2. the `.owner` file exists but cannot be sourced, or
+3. `OWNER_PID` is missing, or
+4. `kill -0 $OWNER_PID` fails (worker PID no longer exists), or
+5. the PID exists but `ps -p $OWNER_PID -o args=` does not contain `sagequeue-worker.sh`
+   (PID has been reused for some other process)
+
+For each orphaned job, recovery performs the state transition:
+
+* `running/<job>.env  →  pending/<job>.env`
+
+and removes the stale owner file.
+
+Concurrency control: `bin/sagequeue-recover.sh` takes a single global lock (`var/<JOBSET>/run/recover.lock`) via `flock`, so multiple workers and the systemd timer can all invoke recovery safely.
+
+Where recovery runs:
+
+* once at the start of every worker process (worker does a one-shot recovery before entering the main claim loop)
+* periodically via `sagequeue-recover.timer` → `sagequeue-recover.service`
+
+What recovery **does not** do: it does not inspect whether a container-side solver process is still running. Ownership is defined strictly in terms of the host worker PID recorded in the `.owner` file.
+
+
 
 ### Configuration contract
 
@@ -196,10 +277,12 @@ Workers exit with a configuration error if `SAGE_BASE_ARGS` contains either flag
 Units shipped in `systemd/`:
 
 - `sagequeue-container.service`  
-  Oneshot. Ensures the `sagemath` container exists and is running. This is a dependency of the workers.
+  Oneshot service. Ensures the `sagemath` container exists and is running. This is a dependency of the workers.
+
 
 - `sagequeue@.service`  
-  Template unit. Instance `sagequeue@N.service` is “worker N”. Each worker repeatedly claims a job and runs Sage.
+  Template unit. Instance `sagequeue@N.service` runs one worker loop (see “Queue model”).
+
 
 - `sagequeue-recover.service`  
   Scans `running/` for jobs left behind by crashes/reboots and requeues them to `pending/`.
@@ -310,3 +393,4 @@ echo "http://localhost:8888/tree?${TOKEN}"
 ## License
 
 MIT. See `LICENSE`.
+
