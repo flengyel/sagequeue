@@ -1,30 +1,31 @@
 # Containerfile for a SageMath image with pycryptosat preinstalled.
 #
-# Goal: make Sage's `cryptominisat` SAT backend usable without reinstalling after reboots
-# or after recreating the container.
+# This bakes pycryptosat into the image so Sage's `cryptominisat` SAT backend works
+# even after the container is removed/recreated (e.g. `podman-compose down`).
 #
-# Build:
-#   podman build -f Containerfile --build-arg SAGE_TAG=10.7 -t localhost/sagequeue-sagemath:10.7-pycryptosat .
+# Build example:
+#   podman build -f Containerfile --build-arg SAGE_TAG=10.7 \
+#     -t localhost/sagequeue-sagemath:10.7-pycryptosat .
 #
-# Then update podman-compose.yml to use:
+# Then `podman-compose.yml` should reference:
 #   image: localhost/sagequeue-sagemath:${SAGE_TAG:-10.7}-pycryptosat
 
 ARG SAGE_TAG=10.7
 FROM ghcr.io/sagemath/sage/sage-debian-bullseye-standard-with-targets-optional:${SAGE_TAG}
 
-# Install toolchain needed to build pycryptosat from source.
+# Build dependencies for a source install of pycryptosat.
 USER root
 RUN apt-get update && apt-get install -y --no-install-recommends \
       build-essential cmake pkg-config \
     && rm -rf /var/lib/apt/lists/*
 
+# Sage's launcher expects HOME to be set; set it explicitly for build-time RUN steps.
+# Also ensure the directory exists and is owned by the Sage user (uid 1000).
 RUN mkdir -p /home/sage && chown -R 1000:1000 /home/sage
 ENV HOME=/home/sage
 ENV DOT_SAGE=/home/sage/.sage
 
-
-# Build/install pycryptosat inside Sage's Python environment.
-# Run as the normal (uid 1000) user so the installation lands in the expected Sage prefix.
+# Install pycryptosat inside Sage's Python environment.
 USER 1000:1000
 WORKDIR /sage
 
