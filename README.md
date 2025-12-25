@@ -9,6 +9,7 @@ Primary target workload: stride/offset partitioned runs of `rank_boundary_sat_v1
 ### 1) Container stack
 
 - `podman-compose.yml` runs the SageMath container (Jupyter exposed on port `8888`).
+- `Containerfile` builds the SageMath image used by `podman-compose.yml`.
 - `man-up.sh` / `man-down.sh` start/stop the stack.
 - `run-bash.sh` opens an interactive shell in the container.
 - `bin/fix-bind-mounts.sh` + `bin/show-mapped-ids.sh` help resolve host permission issues with rootless Podman bind mounts on WSL2.
@@ -44,6 +45,36 @@ The queue system adds reboot tolerance and operational control:
   - ensures repo scripts are executable
   - enables `loginctl enable-linger $USER` (best-effort; may use `sudo`)
 
+## Persistent CryptoMiniSat support (pycryptosat baked into the image)
+
+The default experiment configs use:
+
+- `--sat_backend cryptominisat`
+
+That backend requires `pycryptosat` inside Sage’s Python environment. Installing it manually inside a running container works, but it is lost if the container is removed and recreated (e.g. via `podman-compose down`).
+
+This repository solves that by baking `pycryptosat` into the image using `Containerfile`. The repo’s `podman-compose.yml` is assumed to already reference the resulting local image:
+
+- `localhost/sagequeue-sagemath:${SAGE_TAG:-10.7}-pycryptosat`
+
+### Build the image (required once per SAGE_TAG)
+
+From the repo root:
+
+```bash
+podman build -f Containerfile --build-arg SAGE_TAG=10.7 \
+  -t localhost/sagequeue-sagemath:10.7-pycryptosat .
+```
+
+If you change `SAGE_TAG` in your environment/compose, build the matching tag.
+
+### Verify inside the container
+
+```bash
+podman exec -it sagemath bash -lc \
+  'cd /sage && ./sage -python -c "from pycryptosat import Solver; s=Solver(); s.add_clause([1]); print(s.solve())"'
+```
+
 ## Quick start
 
 ### 0) WSL2 prerequisite: enable systemd
@@ -72,7 +103,14 @@ podman ps
 
 If `podman ps` works as the normal user, the environment is usable.
 
-### 1) Run the idempotent setup script
+### 1) Build the Sage image (if not already built)
+
+```bash
+podman build -f Containerfile --build-arg SAGE_TAG=10.7 \
+  -t localhost/sagequeue-sagemath:10.7-pycryptosat .
+```
+
+### 2) Run the idempotent setup script
 
 From the repository root:
 
@@ -87,20 +125,20 @@ Optional toggles:
 - `DO_COMPOSE_UP=0 bin/setup.sh` (skip container up)
 - `DO_LINGER=0 bin/setup.sh` (skip enabling linger)
 
-### 2) Enable the queue services (Shrikhande jobset)
+### 3) Enable the queue services (Shrikhande jobset)
 
 ```bash
 chmod +x bin/*.sh
 make CONFIG=config/shrikhande_r3.mk enable
 ```
 
-### 3) Enqueue the stride offsets (`0..STRIDE-1`)
+### 4) Enqueue the stride offsets (`0..STRIDE-1`)
 
 ```bash
 make CONFIG=config/shrikhande_r3.mk enqueue-stride
 ```
 
-### 4) Monitor
+### 5) Monitor
 
 ```bash
 make CONFIG=config/shrikhande_r3.mk progress
@@ -171,53 +209,6 @@ Disable services:
 
 ```bash
 make CONFIG=config/shrikhande_r3.mk disable
-```
-
-## Optional: XOR-capable CryptoMiniSat backend (pycryptosat)
-
-If Sage’s `cryptominisat` SAT backend is used with native XOR constraints, `pycryptosat` bindings may be needed inside Sage’s Python environment.
-
-### 1) Install build toolchain in the container (one-time)
-
-```bash
-podman exec -u 0 -it sagemath bash -lc \
-  'apt-get update && apt-get install -y --no-install-recommends \
-     build-essential cmake pkg-config \
-   && rm -rf /var/lib/apt/lists/*'
-```
-
-### 2) Install pycryptosat inside Sage (pinned)
-
-Run as the normal container user (no `-u 0`):
-
-```bash
-podman exec -it sagemath bash -lc \
-  'cd /sage && ./sage -pip uninstall -y pycryptosat || true'
-```
-
-Then force a source build and pin a known working version:
-
-```bash
-podman exec -it sagemath bash -lc \
-  'cd /sage && ./sage -pip install --no-binary=pycryptosat pycryptosat==5.11.21'
-```
-
-### 3) Verify bindings
-
-```bash
-podman exec -it sagemath bash -lc \
-  'cd /sage && ./sage -python -c "from pycryptosat import Solver; s=Solver(); s.add_clause([1]); print(s.solve())"'
-```
-
-Optional: verify Sage can instantiate the solver wrapper:
-
-```bash
-podman exec -it sagemath bash -lc 'cd /sage && ./sage -python - <<'"'"'PY'"'"'
-from sage.sat.solvers.satsolver import SAT
-S = SAT(solver="cryptominisat")
-S.add_clause((1,))
-print(S())
-PY'
 ```
 
 ## Troubleshooting
