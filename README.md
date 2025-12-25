@@ -4,82 +4,57 @@
 
 Primary target workload: stride/offset partitioned runs of `rank_boundary_sat_v18.sage` (e.g. `STRIDE=8`, offsets `0..7`) for mod-2 boundary rank distribution experiments (e.g. Shrikhande graph, then rook graph).
 
-## What this repository contains
+## Repository layout
 
-### 1) Container stack
+Top-level:
 
-- `podman-compose.yml` runs the SageMath container (Jupyter exposed on port `8888`).
-- `Containerfile` builds the SageMath image used by `podman-compose.yml`.
-- `man-up.sh` / `man-down.sh` start/stop the stack.
-- `run-bash.sh` opens an interactive shell in the container.
-- `bin/fix-bind-mounts.sh` + `bin/show-mapped-ids.sh` help resolve host permission issues with rootless Podman bind mounts on WSL2.
+- `Containerfile` — builds the local Sage image used by `podman-compose.yml` (includes `pycryptosat` for CryptoMiniSat).
+- `podman-compose.yml` — runs the `sagemath` container and exposes Jupyter on port 8888.
+- `Makefile` — jobset selection, queue operations, and systemd `--user` service control.
+- `config/*.mk` — jobset configs (Shrikhande and rook live here).
+- `systemd/` — user unit files installed into `~/.config/systemd/user/`.
+- `var/` — durable queue + logs (gitignored).
+- `man-up.sh`, `man-down.sh`, `run-bash.sh` — container convenience helpers.
+- `venvfix.sh`, `requirements.txt` — repo-local `.venv` with `podman-compose` (so `systemd --user` can find it).
+
+`bin/`:
+
+- `bin/build-image.sh` — builds the local image defined by `Containerfile` and recreates the `sagemath` container.
+- `bin/setup.sh` — idempotent setup (bind mounts, permissions, venv/podman-compose visibility, optional linger).
+- `bin/sagequeue-diag.sh` — one-shot diagnostic snapshot (queue + systemd + container + solver procs).
+- `bin/sagequeue-ensure-container.sh` — oneshot “ensure container is up” (used by systemd unit `sagequeue-container.service`).
+- `bin/sagequeue-worker.sh` — worker loop (used by `sagequeue@.service`).
+- `bin/sagequeue-recover.sh` — requeues orphaned `running/` jobs (used by `sagequeue-recover.service`).
+- `bin/fix-bind-mounts.sh`, `bin/show-mapped-ids.sh` — rootless bind-mount permission helpers.
+
+## Container + notebooks
 
 **Notebook location:** `rank_boundary_sat_v18.sage` is expected to exist on the host at:
 
 - Linux/WSL path: `${HOME}/Jupyter/rank_boundary_sat_v18.sage`
 - Windows path (same directory): `~\Jupyter\rank_boundary_sat_v18.sage`
 
-That directory is bind-mounted by the compose file as:
+That directory is bind-mounted as:
 
 - container path: `/home/sage/notebooks/rank_boundary_sat_v18.sage`
 
-### 2) Queue runner (sagequeue)
+The experiment uses `--resume`, so state files (e.g. `state_shrikhande_r3_stride8_off0.txt`) live alongside the notebook in `${HOME}/Jupyter/` and survive reboots and container recreation.
 
-The queue system adds reboot tolerance and operational control:
+## Why a custom image exists (CryptoMiniSat backend)
 
-- Durable job queue on disk: `var/<JOBSET>/queue/{pending,running,done,failed}`
-- N workers supervised by `systemd --user` (`sagequeue@.service`)
-- Periodic orphan recovery (`sagequeue-recover.timer`), to requeue jobs stuck in `running/` after reboots/crashes
-- Per-offset logs under `var/<JOBSET>/log/`
+The default configs use:
 
-### 3) Idempotent setup utility
+- `--solver sat --sat_backend cryptominisat`
 
-- `bin/setup.sh` performs a one-time (and repeatable) local setup up through enabling user lingering:
-  - sanity checks (`podman`, `systemctl --user`)
-  - creates bind-mount directories (using `.sagequeue-*` names)
-  - verifies `${HOME}/Jupyter/rank_boundary_sat_v18.sage` exists
-  - runs `bin/fix-bind-mounts.sh` to fix ownership/perms/ACLs for bind mounts
-  - ensures `podman-compose` is available (builds `.venv` via `./venvfix.sh` if needed)
-  - if needed, symlinks `podman-compose` into `/usr/local/bin` so it is visible to `systemd --user` (may prompt for `sudo`)
-  - brings up the container stack (`podman-compose up -d sagemath`)
-  - ensures repo scripts are executable
-  - enables `loginctl enable-linger $USER` (best-effort; may use `sudo`)
+Sage’s `cryptominisat` backend requires `pycryptosat` inside Sage’s Python environment. Installing it manually in a running container works, but it is lost whenever the container is removed and recreated (e.g. `podman-compose down`).
 
-## Persistent CryptoMiniSat support (pycryptosat baked into the image)
+This repository bakes `pycryptosat` into the image via `Containerfile`. The local image tag is:
 
-The default experiment configs use:
+- `localhost/sagequeue-sagemath:10.7-pycryptosat` (for `SAGE_TAG=10.7`)
 
-- `--sat_backend cryptominisat`
+## First-time bring-up (exact sequence)
 
-That backend requires `pycryptosat` inside Sage’s Python environment. Installing it manually inside a running container works, but it is lost if the container is removed and recreated (e.g. via `podman-compose down`).
-
-This repository solves that by baking `pycryptosat` into the image using `Containerfile`. The repo’s `podman-compose.yml` is assumed to already reference the resulting local image:
-
-- `localhost/sagequeue-sagemath:${SAGE_TAG:-10.7}-pycryptosat`
-
-### Build the image (required once per SAGE_TAG)
-
-From the repo root:
-
-```bash
-podman build -f Containerfile --build-arg SAGE_TAG=10.7 \
-  -t localhost/sagequeue-sagemath:10.7-pycryptosat .
-```
-
-If you change `SAGE_TAG` in your environment/compose, build the matching tag.
-
-### Verify inside the container
-
-```bash
-podman exec -it sagemath bash -lc \
-  'cd /sage && ./sage -python -c "from pycryptosat import Solver; s=Solver(); s.add_clause([1]); print(s.solve())"'
-```
-
-## Quick start
-
-### 0) WSL2 prerequisite: enable systemd
-
-Rootless Podman needs a working per-user runtime directory (`/run/user/<uid>`). On WSL2, this is reliably available with systemd enabled.
+### 0) Enable systemd in WSL2
 
 Edit `/etc/wsl.conf` (merge with existing sections; do not delete them):
 
@@ -88,51 +63,65 @@ Edit `/etc/wsl.conf` (merge with existing sections; do not delete them):
 systemd=true
 ```
 
-Then from **Windows PowerShell**:
+From **Windows PowerShell**:
 
 ```powershell
 wsl.exe --shutdown
 ```
 
-Open Ubuntu again and sanity-check:
+Re-open Ubuntu and confirm:
 
 ```bash
 ps -p 1 -o comm=
 podman ps
+systemctl --user status >/dev/null
 ```
 
-If `podman ps` works as the normal user, the environment is usable.
+### 1) Build the local Sage image and recreate the container
 
-### 1) Build the Sage image (if not already built)
+From the repo root:
 
 ```bash
-podman build -f Containerfile --build-arg SAGE_TAG=10.7 \
-  -t localhost/sagequeue-sagemath:10.7-pycryptosat .
+chmod +x bin/build-image.sh
+bin/build-image.sh
 ```
 
-### 2) Run the idempotent setup script
+What this does (by design):
 
-From the repository root:
+- builds `localhost/sagequeue-sagemath:${SAGE_TAG}-pycryptosat` from `Containerfile` (default `SAGE_TAG=10.7`)
+- removes any existing `sagemath` container
+- runs `podman-compose up -d sagemath` to start a fresh container from the new image
+
+**Important constraint:** `SAGE_TAG` is the *base Sage version* (e.g. `10.7`). Do not include `-pycryptosat` in `SAGE_TAG`.
+
+### 2) Run the idempotent local setup
 
 ```bash
 chmod +x bin/setup.sh
 bin/setup.sh
 ```
 
-Optional toggles:
+This script creates the bind-mount directories (using `.sagequeue-*` names), fixes permissions/ACLs for rootless Podman bind mounts, ensures `podman-compose` exists (via repo-local `.venv`), and (optionally) enables linger so `systemd --user` services can run after reboot without an interactive login.
 
-- `FIX_PERMS=0 bin/setup.sh` (skip permission fix)
-- `DO_COMPOSE_UP=0 bin/setup.sh` (skip container up)
-- `DO_LINGER=0 bin/setup.sh` (skip enabling linger)
+### 3) Enable the queue services for a jobset
 
-### 3) Enable the queue services (Shrikhande jobset)
+Shrikhande rank-3 jobset:
 
 ```bash
 chmod +x bin/*.sh
 make CONFIG=config/shrikhande_r3.mk enable
 ```
 
-### 4) Enqueue the stride offsets (`0..STRIDE-1`)
+This:
+
+- writes `~/.config/sagequeue/sagequeue.env` for the selected jobset
+- installs user unit files into `~/.config/systemd/user/`
+- enables and starts:
+  - `sagequeue-container.service`
+  - `sagequeue-recover.timer`
+  - `sagequeue@1.service` … `sagequeue@WORKERS.service`
+
+### 4) Enqueue stride offsets
 
 ```bash
 make CONFIG=config/shrikhande_r3.mk enqueue-stride
@@ -143,8 +132,12 @@ make CONFIG=config/shrikhande_r3.mk enqueue-stride
 ```bash
 make CONFIG=config/shrikhande_r3.mk progress
 make CONFIG=config/shrikhande_r3.mk logs
-# or:
-make CONFIG=config/shrikhande_r3.mk journal
+```
+
+A full snapshot:
+
+```bash
+make CONFIG=config/shrikhande_r3.mk diag
 ```
 
 Logs land in:
@@ -153,79 +146,149 @@ Logs land in:
 - …
 - `var/shri_r3/log/shri_r3_off7.log`
 
-## Switching to rook
+## How jobsets work (config/*.mk)
 
-```bash
-make CONFIG=config/rook_r3.mk env restart
-make CONFIG=config/rook_r3.mk enqueue-stride
-```
+A jobset config sets (at minimum):
 
-State remains separated by jobset:
+- `JOBSET` — directory prefix under `var/`
+- `STRIDE` — number of offsets
+- `WORKERS` — number of `systemd` worker instances
+- `SAGE_BASE_ARGS` — experiment flags **excluding** `--stride` and `--offset`
+- stop file paths for host and container
 
-- `var/shri_r3/...`
-- `var/rook_r3/...`
+The Makefile writes those into:
+
+- `~/.config/sagequeue/sagequeue.env`
+
+Systemd units source that file at runtime.
 
 ## Queue model
 
-Each queued job is a small env file containing job parameters (currently `OFFSET=<k>`). Workers:
+On-disk layout per jobset:
 
-1. claim a job by atomically moving it `pending -> running`
-2. run Sage inside the container with configured base flags plus `--stride STRIDE --offset OFFSET`
+- `var/<JOBSET>/queue/pending/`
+- `var/<JOBSET>/queue/running/`
+- `var/<JOBSET>/queue/done/`
+- `var/<JOBSET>/queue/failed/`
+- `var/<JOBSET>/log/`
+- `var/<JOBSET>/run/`
+
+Each job is a tiny env file (currently `OFFSET=<k>`). Workers:
+
+1. claim a job by atomic move `pending → running`
+2. execute Sage inside the container with:
+   - configured `SAGE_BASE_ARGS`
+   - plus injected `--stride STRIDE --offset OFFSET`
 3. move the job file to `done/` or `failed/`
 
 ### Configuration contract
 
 `SAGE_BASE_ARGS` must not include `--stride` or `--offset`.
 
-- `STRIDE` is configured in `config/*.mk`
-- `OFFSET` is stored in each queued job file
-- the worker injects both `--stride "$STRIDE" --offset "$OFFSET"`
+- `STRIDE` comes from `config/*.mk`
+- `OFFSET` comes from the queued job file
+- the worker injects both
 
-If `SAGE_BASE_ARGS` contains either `--stride` or `--offset`, workers exit with a configuration error.
+Workers exit with a configuration error if `SAGE_BASE_ARGS` contains either flag.
 
-## Operational commands
+## systemd --user units (what they do)
 
-Stop-gating (prevents claiming *new* jobs; running Sage jobs may stop if the script honors `--stop_file`):
+Units shipped in `systemd/`:
+
+- `sagequeue-container.service`  
+  Oneshot. Ensures the `sagemath` container exists and is running. This is a dependency of the workers.
+
+- `sagequeue@.service`  
+  Template unit. Instance `sagequeue@N.service` is “worker N”. Each worker repeatedly claims a job and runs Sage.
+
+- `sagequeue-recover.service`  
+  Scans `running/` for jobs left behind by crashes/reboots and requeues them to `pending/`.
+
+- `sagequeue-recover.timer`  
+  Triggers `sagequeue-recover.service` periodically.
+
+Inspect the live installed units:
+
+```bash
+systemctl --user cat sagequeue-container.service
+systemctl --user cat sagequeue@.service
+systemctl --user cat sagequeue-recover.timer
+```
+
+## Operational procedures (startup, stop, recovery)
+
+### Procedure: restart everything for the active jobset
+
+```bash
+make CONFIG=config/shrikhande_r3.mk restart
+```
+
+### Procedure: stop everything for the active jobset
+
+```bash
+make CONFIG=config/shrikhande_r3.mk stop
+```
+
+### Procedure: stop-gate new work (without deleting queue state)
+
+Creates the host stop file that is bind-mounted into the container:
 
 ```bash
 make CONFIG=config/shrikhande_r3.mk request-stop
+```
+
+To resume:
+
+```bash
 make CONFIG=config/shrikhande_r3.mk clear-stop
 ```
 
-Requeue jobs:
+### Procedure: requeue orphaned running jobs immediately
 
 ```bash
 make CONFIG=config/shrikhande_r3.mk requeue-running
+```
+
+### Procedure: retry failures
+
+```bash
 make CONFIG=config/shrikhande_r3.mk retry-failed
 ```
 
-Destructive queue clear (jobset only):
+### Procedure: destructive reset of the jobset queue
 
 ```bash
 make CONFIG=config/shrikhande_r3.mk purge-queue
+make CONFIG=config/shrikhande_r3.mk enqueue-stride
 ```
 
-Disable services:
+### Procedure: after rebuilding the image
+
+Rebuild + recreate container:
 
 ```bash
-make CONFIG=config/shrikhande_r3.mk disable
+bin/build-image.sh
 ```
 
-## Troubleshooting
-
-### Permission errors under `/home/sage/.local` or `/home/sage/.sage`
-
-Usually caused by missing bind mounts or missing host directories. If in doubt, re-run:
+Then restart the queue:
 
 ```bash
-bin/setup.sh
+make CONFIG=config/shrikhande_r3.mk restart
 ```
 
-### `RunRoot ... is not writable` / `/run/user/<uid>: permission denied`
+### Procedure: switching to rook
 
-Usually indicates systemd is not enabled under WSL2. Re-check the WSL2 systemd prerequisite.
+```bash
+make CONFIG=config/rook_r3.mk env restart
+make CONFIG=config/rook_r3.mk enqueue-stride
+```
 
-### Jupyter URL / token
+Queue state remains separated:
+
+- `var/shri_r3/...`
+- `var/rook_r3/...`
+
+## Jupyter URL / token
 
 Jupyter URL:
 
