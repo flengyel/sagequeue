@@ -205,23 +205,35 @@ State transitions are implemented as filesystem moves (`mv`) within the same job
 
 ```mermaid
 stateDiagram-v2
-  direction LR
+  direction TB
 
-  state "pending/\n(var/<JOBSET>/queue/pending)" as P
-  state "running/\n(var/<JOBSET>/queue/running)" as R
-  state "done/\n(var/<JOBSET>/queue/done)" as D
-  state "failed/\n(var/<JOBSET>/queue/failed)" as F
+  state "pending/" as P
+  state "running/" as R
+  state "done/" as D
+  state "failed/" as F
 
-  [*] --> P: enqueue-stride\n(create *.env)
+  note right of P
+    var/<JOBSET>/queue/pending
+  end note
+  note right of R
+    var/<JOBSET>/queue/running
+  end note
+  note right of D
+    var/<JOBSET>/queue/done
+  end note
+  note right of F
+    var/<JOBSET>/queue/failed
+  end note
 
-  P --> R: claim\n(worker mv pending→running)\n+ write running/*.owner
-
-  R --> D: rc==0\n(mv running→done)
-  R --> F: rc!=0\n(mv running→failed)
-
-  F --> P: retry-failed\n(mv failed→pending)
-  R --> P: recovery (orphan)\n(mv running→pending)\n+ remove *.owner
+  [*] --> P: enqueue-stride (create *.env)
+  P --> R: claim (mv pending→running) + write *.owner
+  R --> D: rc==0 (mv running→done)
+  R --> F: rc!=0 (mv running→failed)
+  F --> P: retry-failed (mv failed→pending)
+  R --> P: recovery/orphan (mv running→pending) + remove *.owner
 ```
+
+
 
 ### Recovery semantics (what “orphaned running jobs” means)
 
