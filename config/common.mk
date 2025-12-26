@@ -4,7 +4,7 @@ SERVICE             ?= sagemath
 
 # Inside-container execution
 CONTAINER_WORKDIR   ?= /sage
-SAGE_BIN            ?= ./sage
+SAGE_BIN            = ./sage
 
 # Notebook bind mount locations (matches podman-compose.yml)
 NOTEBOOKS_CONT      ?= /home/sage/notebooks

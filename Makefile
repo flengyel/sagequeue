@@ -13,7 +13,8 @@ CONFIG ?= config/shrikhande_r3.mk
 include $(CONFIG)
 
 # Resolve compose file absolute path (systemd-safe)
-COMPOSE_FILE_ABS := $(abspath $(PROJECT_ROOT)/$(COMPOSE_FILE))
+COMPOSE_FILE_ABS := $(abspath $(if $(filter /%,$(COMPOSE_FILE)),$(COMPOSE_FILE),$(PROJECT_ROOT)/$(COMPOSE_FILE)))
+
 
 # Per-jobset state
 STATE_DIR   := $(PROJECT_ROOT)/var/$(JOBSET)
