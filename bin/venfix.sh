@@ -15,6 +15,9 @@ VENV_DIR="${VENV_DIR:-.venv}"
 require_cmd() { command -v "$1" >/dev/null 2>&1 || { echo "Missing required command: $1" >&2; exit 127; }; }
 require_cmd "$PYTHON"
 
+# Relative to PROJECT_ROOT 
+cd $PROJECT_ROOT
+
 echo "Creating venv: ${VENV_DIR} (interpreter: ${PYTHON})"
 rm -rf "${VENV_DIR}"
 "${PYTHON}" -m venv "${VENV_DIR}"
