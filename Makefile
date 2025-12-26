@@ -73,7 +73,7 @@ check: ## Verify required commands/files exist.
 	command -v find >/dev/null
 	command -v flock >/dev/null
 	test -f "$(COMPOSE_FILE_ABS)"
-      	test -x "$(PODMAN_COMPOSE_ABS)"
+	test -x "$(PODMAN_COMPOSE_ABS)"
 	test -x "$(PROJECT_ROOT)/bin/sagequeue-worker.sh" || true
 	echo "[ok] toolchain present and compose file found"
 

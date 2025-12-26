@@ -84,7 +84,16 @@ chmod +x venvfix.sh bin/setup.sh bin/build-image.sh
 ./venvfix.sh
 ```
 
-### 1) Build the local Sage image and recreate the container
+### 2) Run the idempotent local setup
+
+```bash
+chmod +x bin/setup.sh
+bin/setup.sh
+```
+
+This script creates the bind-mount directories (using `.sagequeue-*` names), fixes permissions/ACLs for rootless Podman bind mounts, ensures `podman-compose` exists (via repo-local `.venv`), and (optionally) enables linger so `systemd --user` services can run after reboot without an interactive login.
+
+### 3) Build the local Sage image and recreate the container
 
 From the repo root:
 
@@ -101,16 +110,7 @@ What this does (by design):
 
 **Important constraint:** `SAGE_TAG` is the *base Sage version* (e.g. `10.7`). Do not include `-pycryptosat` in `SAGE_TAG`.
 
-### 2) Run the idempotent local setup
-
-```bash
-chmod +x bin/setup.sh
-bin/setup.sh
-```
-
-This script creates the bind-mount directories (using `.sagequeue-*` names), fixes permissions/ACLs for rootless Podman bind mounts, ensures `podman-compose` exists (via repo-local `.venv`), and (optionally) enables linger so `systemd --user` services can run after reboot without an interactive login.
-
-### 3) Enable the queue services for a jobset
+### 4) Enable the queue services for a jobset
 
 Shrikhande rank-3 jobset:
 
@@ -128,13 +128,13 @@ This:
   - `sagequeue-recover.timer`
   - `sagequeue@1.service` … `sagequeue@WORKERS.service`
 
-### 4) Enqueue stride offsets
+### 5) Enqueue stride offsets
 
 ```bash
 make CONFIG=config/shrikhande_r3.mk enqueue-stride
 ```
 
-### 5) Monitor
+### 6) Monitor
 
 ```bash
 make CONFIG=config/shrikhande_r3.mk progress
