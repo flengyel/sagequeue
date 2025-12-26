@@ -4,7 +4,7 @@ Description=SageQueue: ensure podman-compose container is up
 [Service]
 Type=oneshot
 EnvironmentFile=%h/.config/sagequeue/sagequeue.env
-ExecStart=/usr/bin/env bash -lc '. %h/.config/sagequeue/sagequeue.env; exec "$PROJECT_ROOT/bin/sagequeue-ensure-container.sh"'
+ExecStart=/usr/bin/env bash -c '. %h/.config/sagequeue/sagequeue.env; exec "$PROJECT_ROOT/bin/sagequeue-ensure-container.sh"'
 RemainAfterExit=yes
 
 [Install]
