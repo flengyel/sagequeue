@@ -7,6 +7,12 @@ MAKEFLAGS += --no-builtin-rules
 
 # Project root = directory containing this Makefile
 PROJECT_ROOT := $(abspath $(dir $(firstword $(MAKEFILE_LIST))))
+# Ignore host environment overrides for repo wiring.
+undefine COMPOSE_FILE
+undefine SERVICE
+undefine SAGE_BIN
+undefine SAGE_BASE_ARGS
+
 
 # Select run config
 CONFIG ?= config/shrikhande_r3.mk
@@ -14,6 +20,8 @@ include $(CONFIG)
 
 # Resolve compose file absolute path (systemd-safe)
 COMPOSE_FILE_ABS := $(abspath $(if $(filter /%,$(COMPOSE_FILE)),$(COMPOSE_FILE),$(PROJECT_ROOT)/$(COMPOSE_FILE)))
+PODMAN_COMPOSE_ABS := $(abspath $(PROJECT_ROOT)/.venv/bin/podman-compose)
+
 
 
 # Per-jobset state
@@ -65,6 +73,7 @@ check: ## Verify required commands/files exist.
 	command -v find >/dev/null
 	command -v flock >/dev/null
 	test -f "$(COMPOSE_FILE_ABS)"
+      	test -x "$(PODMAN_COMPOSE_ABS)"
 	test -x "$(PROJECT_ROOT)/bin/sagequeue-worker.sh" || true
 	echo "[ok] toolchain present and compose file found"
 
@@ -89,6 +98,7 @@ env: setup ## Write systemd EnvironmentFile at $(ENV_FILE) for the selected conf
 	LOG_DIR=$(LOG_DIR)
 	
 	COMPOSE_FILE=$(COMPOSE_FILE_ABS)
+	PODMAN_COMPOSE=$(PODMAN_COMPOSE_ABS)
 	SERVICE=$(SERVICE)
 	
 	CONTAINER_WORKDIR=$(CONTAINER_WORKDIR)

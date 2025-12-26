@@ -52,7 +52,7 @@ This repository bakes `pycryptosat` into the image via `Containerfile`. The loca
 
 - `localhost/sagequeue-sagemath:10.7-pycryptosat` (for `SAGE_TAG=10.7`)
 
-## First-time bring-up (exact sequence)
+## Installation
 
 ### 0) Enable systemd in WSL2
 
@@ -75,6 +75,13 @@ Re-open Ubuntu and confirm:
 ps -p 1 -o comm=
 podman ps
 systemctl --user status >/dev/null
+```
+
+### 1) Create the virtual environment in the repository root
+
+```bash
+chmod +x venvfix.sh bin/setup.sh bin/build-image.sh
+./venvfix.sh
 ```
 
 ### 1) Build the local Sage image and recreate the container
