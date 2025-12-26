@@ -40,6 +40,6 @@ services:
 
       # Sage/Jupyter runtime state (sagequeue-scoped names)
       - ${HOME}/.sagequeue-dot_sage:/home/sage/.sage:Z,U
-      - ${HOME}/.sagequeue-local:/home/sage/.local:Z,U
+      - ${HOME}/.sagequeue-local:/home/sage/.local/share:Z,U
       - ${HOME}/.sagequeue-config:/home/sage/.config:Z,U
       - ${HOME}/.sagequeue-cache:/home/sage/.cache:Z,U
