@@ -379,20 +379,6 @@ make CONFIG=config/shrikhande_r3.mk purge-queue
 make CONFIG=config/shrikhande_r3.mk enqueue-stride
 ```
 
-### Procedure: after rebuilding the image
-
-Rebuild + recreate container:
-
-```bash
-bin/build-image.sh
-```
-
-Then restart the queue:
-
-```bash
-make CONFIG=config/shrikhande_r3.mk restart
-```
-
 ### Procedure: switching to rook
 
 ```bash
@@ -404,6 +390,45 @@ Queue state remains separated:
 
 - `var/shri_r3/...`
 - `var/rook_r3/...`
+
+### Procedure: rebuild the container image without corrupting the queue
+
+`bin/build-image.sh` removes and recreates the `sagemath` container.  
+If workers are running during container removal, their in-flight `podman exec sagemath ...` 
+calls fail and the corresponding job files move to `var/<JOBSET>/queue/failed/` i
+(typical exit codes: `rc=137` / `rc=255`, including “container has already been removed”).
+
+Run this sequence (example jobset: Shrikhande r=3):
+
+```bash
+# Stop new job claims, then stop all jobset services
+make CONFIG=config/shrikhande_r3.mk request-stop
+make CONFIG=config/shrikhande_r3.mk stop
+
+# Rebuild image and recreate container
+bin/build-image.sh
+
+# Start services again
+make CONFIG=config/shrikhande_r3.mk restart
+
+# Requeue jobs that failed due to the rebuild
+make CONFIG=config/shrikhande_r3.mk retry-failed
+
+# Allow new job claims again
+make CONFIG=config/shrikhande_r3.mk clear-stop
+
+# Verification: confirm the running container is using the rebuilt image
+podman inspect sagemath --format 'ImageName={{.ImageName}} ContainerImageID={{.Image}}'
+podman image inspect localhost/sagequeue-sagemath:${SAGE_TAG:-10.7}-pycryptosat --format 'BuiltImageID={{.Id}} Tags={{.RepoTags}}'
+
+# Verification: confirm pycryptosat is importable in the *running* container
+podman exec -it sagemath bash -lc 'cd /sage && ./sage -python -c "import pycryptosat; print(pycryptosat.__version__)"'
+
+# Verification: confirm workers are active and jobs are being claimed
+systemctl --user --no-pager -l status "sagequeue@1.service"
+make CONFIG=config/shrikhande_r3.mk progress
+podman exec sagemath bash -lc "pgrep -af '^python3 .*rank_boundary_sat_v18\.sage\.py' | wc -l"
+```
 
 ## Jupyter URL / token
 
