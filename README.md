@@ -80,8 +80,8 @@ systemctl --user status >/dev/null
 ### 1) Create the virtual environment in the repository root
 
 ```bash
-chmod +x venvfix.sh bin/setup.sh bin/build-image.sh
-./venvfix.sh
+chmod +x bin/venvfix.sh bin/setup.sh bin/build-image.sh
+bin/venvfix.sh
 ```
 
 ### 2) Run the idempotent local setup
