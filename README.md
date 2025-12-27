@@ -12,19 +12,20 @@ Top-level:
 - `podman-compose.yml` — runs the `sagemath` container and exposes Jupyter on port 8888.
 - `Makefile` — jobset selection, queue operations, and systemd `--user` service control.
 - `config/*.mk` — jobset configs (Shrikhande and rook live here).
-- `systemd/` — user unit files installed into `~/.config/systemd/user/`.
+- `systemd/` — user unit files installed into `~/.config/systemd/user/` (not `/etc/systemd/system`).
 - `var/` — durable queue + logs (gitignored).
 - `man-up.sh`, `man-down.sh`, `run-bash.sh` — container convenience helpers.
-- `venvfix.sh`, `requirements.txt` — repo-local `.venv` with `podman-compose` (so `systemd --user` can find it).
+- `requirements.txt` — repo-local `.venv` with `podman-compose` (so `systemd --user` can find it). The venv is created by `bin/setup.sh` via `bin/venvfix.sh`.
 
 `bin/`:
 
-- `bin/build-image.sh` — builds the local image defined by `Containerfile` and recreates the `sagemath` container.
-- `bin/setup.sh` — idempotent setup (bind mounts, permissions, venv/podman-compose visibility, optional linger).
+- `bin/build-image.sh` — builds the local image defined by `Containerfile`, seeds `pycryptosat` into the host DOT_SAGE directory `${HOME}/.sagequeue-dot_sage` (required because the DOT_SAGE bind mount masks image-built packages), and recreates the `sagemath` container.
+- `bin/setup.sh` — **one-time bootstrap** (safe to re-run): creates bind mounts, fixes permissions/ACLs, and ensures the repo-local `.venv` exists by running `bin/venvfix.sh` (the only venv builder).
+- `bin/venvfix.sh` — deterministic venv builder (fixed `python3`, fixed `./.venv`, requires `requirements.txt`); invoked only by `bin/setup.sh`.
 - `bin/sagequeue-diag.sh` — one-shot diagnostic snapshot (queue + systemd + container + solver procs).
 - `bin/sagequeue-ensure-container.sh` — oneshot “ensure container is up” (used by systemd unit `sagequeue-container.service`).
 - `bin/sagequeue-worker.sh` — worker loop (used by `sagequeue@.service`).
-- `bin/sagequeue-recover.sh` — requeues orphaned `running/` jobs (used by `sagequeue-recover.service`).
+- `bin/sagequeue-recover.sh` — requeues orphaned `running/` jobs (used by systemd unit `sagequeue-recover.service`).
 - `bin/fix-bind-mounts.sh`, `bin/show-mapped-ids.sh` — rootless bind-mount permission helpers.
 
 ## Container + notebooks
@@ -52,6 +53,8 @@ This repository bakes `pycryptosat` into the image via `Containerfile`. The loca
 
 - `localhost/sagequeue-sagemath:10.7-pycryptosat` (for `SAGE_TAG=10.7`)
 
+**Important bind-mount constraint:** `podman-compose.yml` bind-mounts `${HOME}/.sagequeue-dot_sage` onto `/home/sage/.sage`. That bind mount masks any `/home/sage/.sage` content created in the image, so `pycryptosat` must be present in the host-mounted `${HOME}/.sagequeue-dot_sage`. `bin/build-image.sh` automates this seeding and verifies `import pycryptosat` in the running container.
+
 ## Installation
 
 ### 0) Enable systemd in WSL2
@@ -77,23 +80,16 @@ podman ps
 systemctl --user status >/dev/null
 ```
 
-### 1) Create the virtual environment in the repository root
+### 1) Run the one-time bootstrap (creates the repo-local `.venv/`)
 
 ```bash
-chmod +x bin/venvfix.sh bin/setup.sh bin/build-image.sh
-bin/venvfix.sh
-```
-
-### 2) Run the idempotent local setup
-
-```bash
-chmod +x bin/setup.sh
+chmod +x bin/*.sh
 bin/setup.sh
 ```
 
-This script creates the bind-mount directories (using `.sagequeue-*` names), fixes permissions/ACLs for rootless Podman bind mounts, ensures `podman-compose` exists (via repo-local `.venv`), and (optionally) enables linger so `systemd --user` services can run after reboot without an interactive login.
+This script creates the bind-mount directories (using `.sagequeue-*` names), fixes permissions/ACLs for rootless Podman bind mounts, and ensures `podman-compose` exists via the repo-local `.venv`. `bin/venvfix.sh` is invoked only from `bin/setup.sh` (do not run it directly).
 
-### 3) Build the local Sage image and recreate the container
+### 2) Build the local Sage image and recreate the container
 
 From the repo root:
 
@@ -105,12 +101,13 @@ bin/build-image.sh
 What this does (by design):
 
 - builds `localhost/sagequeue-sagemath:${SAGE_TAG}-pycryptosat` from `Containerfile` (default `SAGE_TAG=10.7`)
+- seeds `pycryptosat` into the host DOT_SAGE bind-mount directory `${HOME}/.sagequeue-dot_sage` (required because the bind mount masks image-built packages)
 - removes any existing `sagemath` container
 - runs `podman-compose up -d sagemath` to start a fresh container from the new image
 
 **Important constraint:** `SAGE_TAG` is the *base Sage version* (e.g. `10.7`). Do not include `-pycryptosat` in `SAGE_TAG`.
 
-### 4) Enable the queue services for a jobset
+### 3) Enable the queue services for a jobset
 
 Shrikhande rank-3 jobset:
 
@@ -122,19 +119,19 @@ make CONFIG=config/shrikhande_r3.mk enable
 This:
 
 - writes `~/.config/sagequeue/sagequeue.env` for the selected jobset
-- installs user unit files into `~/.config/systemd/user/`
+- installs user unit files into `~/.config/systemd/user/` (not `/etc/systemd/system`)
 - enables and starts:
   - `sagequeue-container.service`
   - `sagequeue-recover.timer`
   - `sagequeue@1.service` … `sagequeue@WORKERS.service`
 
-### 5) Enqueue stride offsets
+### 4) Enqueue stride offsets
 
 ```bash
 make CONFIG=config/shrikhande_r3.mk enqueue-stride
 ```
 
-### 6) Monitor
+### 5) Monitor
 
 ```bash
 make CONFIG=config/shrikhande_r3.mk progress
@@ -171,7 +168,7 @@ Systemd units source that file at runtime.
 
 ## Queue model
 
-A **jobset** is a named experiment run (graph + rank + solver configuration + stride/worker count) with its own isolated queue and logs.  
+A **jobset** is a named experiment run (graph + rank + solver configuration + stride/worker count) with its own isolated queue and logs.
 In practice, `JOBSET` is the short identifier used to namespace runtime state under `var/` so multiple experiments do not collide.
 
 - `JOBSET` is set by the selected `config/*.mk` file (e.g. `JOBSET=shri_r3`, `JOBSET=rook_r3`).
@@ -234,33 +231,33 @@ stateDiagram-v2
 
 **Transition meanings (what actually happens on disk):**
 
-- **enqueue (create `*.env`)**  
+- **enqueue (create `*.env`)**
   `make … enqueue-stride` writes one job file per offset into `var/{JOBSET}/queue/pending/`, e.g. `shri_r3_off7.env` containing at least `OFFSET=7` (and `ENQUEUED_AT=...`).
 
-- **claim (`pending → running`)**  
-  A worker claims work by an atomic rename:  
-  `mv var/{JOBSET}/queue/pending/<job>.env  var/{JOBSET}/queue/running/<job>.env`  
-  It then writes an owner sidecar file:  
+- **claim (`pending → running`)**
+  A worker claims work by an atomic rename:
+  `mv var/{JOBSET}/queue/pending/<job>.env  var/{JOBSET}/queue/running/<job>.env`
+  It then writes an owner sidecar file:
   `var/{JOBSET}/queue/running/<job>.env.owner` containing:
   - `OWNER_PID=$$` (host PID of the worker process)
   - `OWNER_WORKER_ID=<N>`
   - `OWNER_TS=<timestamp>`
 
-- **rc==0 (`running → done`)**  
-  After `podman exec … ./sage …` exits with status 0, the worker moves:  
+- **rc==0 (`running → done`)**
+  After `podman exec … ./sage …` exits with status 0, the worker moves:
   `mv …/running/<job>.env  …/done/<job>.env`
 
-- **rc!=0 (`running → failed`)**  
-  If Sage exits nonzero (including configuration errors detected by the worker after sourcing the job file), the worker moves:  
+- **rc!=0 (`running → failed`)**
+  If Sage exits nonzero (including configuration errors detected by the worker after sourcing the job file), the worker moves:
   `mv …/running/<job>.env  …/failed/<job>.env`
 
-- **retry-failed (`failed → pending`)**  
+- **retry-failed (`failed → pending`)**
   `make … retry-failed` moves every `*.env` file from `failed/` back to `pending/` so workers will rerun them.
 
-- **recover (orphan) (`running → pending`)**  
-  Recovery scans `running/*.env` and treats a job as orphaned if its `*.owner` file is missing, cannot be sourced, the recorded `OWNER_PID` is not alive (`kill -0` fails), or that PID is alive but is no longer a `sagequeue-worker.sh` process.  
-  For each orphaned job, recovery removes any stale `*.owner` and moves:  
-  `mv …/running/<job>.env  …/pending/<job>.env`  
+- **recover (orphan) (`running → pending`)**
+  Recovery scans `running/*.env` and treats a job as orphaned if its `*.owner` file is missing, cannot be sourced, the recorded `OWNER_PID` is not alive (`kill -0` fails), or that PID is alive but is no longer a `sagequeue-worker.sh` process.
+  For each orphaned job, recovery removes any stale `*.owner` and moves:
+  `mv …/running/<job>.env  …/pending/<job>.env`
   Recovery is guarded by a global `flock` on `var/{JOBSET}/run/recover.lock` so it is safe to run from multiple workers and from the systemd timer.
 
 
@@ -317,18 +314,18 @@ Workers exit with a configuration error if `SAGE_BASE_ARGS` contains either flag
 
 Units shipped in `systemd/`:
 
-- `sagequeue-container.service`  
+- `sagequeue-container.service`
   Oneshot service. Ensures the `sagemath` container exists and is running. This is a dependency of the workers.
 
 
-- `sagequeue@.service`  
+- `sagequeue@.service`
   Template unit. Instance `sagequeue@N.service` runs one worker loop (see “Queue model”).
 
 
-- `sagequeue-recover.service`  
+- `sagequeue-recover.service`
   Scans `running/` for jobs left behind by crashes/reboots and requeues them to `pending/`.
 
-- `sagequeue-recover.timer`  
+- `sagequeue-recover.timer`
   Triggers `sagequeue-recover.service` periodically.
 
 Inspect the live installed units:
@@ -400,9 +397,9 @@ Queue state remains separated:
 
 ### Procedure: rebuild the container image without corrupting the queue
 
-`bin/build-image.sh` removes and recreates the `sagemath` container.  
-If workers are running during container removal, their in-flight `podman exec sagemath ...` 
-calls fail and the corresponding job files move to `var/<JOBSET>/queue/failed/` i
+`bin/build-image.sh` removes and recreates the `sagemath` container.
+If workers are running during container removal, their in-flight `podman exec sagemath ...`
+calls fail and the corresponding job files move to `var/<JOBSET>/queue/failed/`
 (typical exit codes: `rc=137` / `rc=255`, including “container has already been removed”).
 
 Run this sequence (example jobset: Shrikhande r=3):
@@ -429,12 +426,12 @@ podman inspect sagemath --format 'ImageName={{.ImageName}} ContainerImageID={{.I
 podman image inspect localhost/sagequeue-sagemath:${SAGE_TAG:-10.7}-pycryptosat --format 'BuiltImageID={{.Id}} Tags={{.RepoTags}}'
 
 # Verification: confirm pycryptosat is importable in the *running* container
-podman exec -it sagemath bash -lc 'cd /sage && ./sage -python -c "import pycryptosat; print(pycryptosat.__version__)"'
+podman exec -it sagemath bash -c 'cd /sage && ./sage -python -c "import pycryptosat; print(pycryptosat.__version__)"'
 
 # Verification: confirm workers are active and jobs are being claimed
 systemctl --user --no-pager -l status "sagequeue@1.service"
 make CONFIG=config/shrikhande_r3.mk progress
-podman exec sagemath bash -lc "pgrep -af '^python3 .*rank_boundary_sat_v18\.sage\.py' | wc -l"
+podman exec sagemath bash -c "pgrep -af '^python3 .*rank_boundary_sat_v18\.sage\.py' | wc -l"
 ```
 
 ## Jupyter URL / token
@@ -459,4 +456,3 @@ echo "http://localhost:8888/tree?${TOKEN}"
 ## License
 
 MIT. See `LICENSE`.
-

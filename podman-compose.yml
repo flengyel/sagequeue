@@ -29,8 +29,9 @@ services:
 
     command:
       - bash
-      - -lc
+      - -c
       - >
+        set -euo pipefail;
         mkdir -p /home/sage/.local/share/jupyter/runtime /home/sage/.config /home/sage/.cache &&
         exec ./sage -n jupyter --no-browser --ip=0.0.0.0 --port=8888 --notebook-dir=/home/sage/notebooks
 
