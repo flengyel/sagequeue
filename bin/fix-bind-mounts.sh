@@ -2,23 +2,29 @@
 set -euo pipefail
 
 # -------- Configuration --------
-C_UID="${C_UID:-1000}"
-C_GID="${C_GID:-1000}"
+# Deterministic: container user/group are fixed by podman-compose.yml (user: "1000:1000")
+C_UID="1000"
+C_GID="1000"
 
-MOUNT_NOTEBOOKS="${MOUNT_NOTEBOOKS:-$HOME/Jupyter}"
-MOUNT_JUPYTER="${MOUNT_JUPYTER:-$HOME/.jupyter}"
+# Deterministic: mount points must match podman-compose.yml
+MOUNT_NOTEBOOKS="$HOME/Jupyter"
+MOUNT_JUPYTER="$HOME/.jupyter"
+MOUNT_DOT_SAGE="$HOME/.sagequeue-dot_sage"
+MOUNT_LOCAL="$HOME/.sagequeue-local"
+MOUNT_CONFIG="$HOME/.sagequeue-config"
+MOUNT_CACHE="$HOME/.sagequeue-cache"
 
 # Preferred names (script will fall back safely if these collide)
-PREFERRED_GROUP="${PREFERRED_GROUP:-sage}"
-PREFERRED_USER="${PREFERRED_USER:-sage}"
+PREFERRED_GROUP="sage"
+PREFERRED_USER="sage"
 
 # 1 = create a host user at the mapped UID (purely cosmetic, for nicer ls -l)
 # 0 = don't create user (files may show numeric UID, but permissions will still work)
-CREATE_USER="${CREATE_USER:-1}"
+CREATE_USER="1"
 
-# Safer default perms (no world access). Adjust if you want.
-DIR_MODE="${DIR_MODE:-2770}"   # setgid + rwx for owner/group
-FILE_MODE="${FILE_MODE:-660}"  # rw for owner/group
+# Safer default perms (no world access).
+DIR_MODE="2770"   # setgid + rwx for owner/group
+FILE_MODE="660"   # rw for owner/group
 
 # -------- Helpers --------
 die() { echo "ERROR: $*" >&2; exit 1; }
@@ -56,7 +62,13 @@ HGID="$(map_one gid "$C_GID")" || die "Could not map container gid $C_GID via po
 echo "Mapped IDs: container ${C_UID}:${C_GID} -> host ${HUID}:${HGID}"
 
 # -------- Ensure mount dirs exist --------
-mkdir -p "$MOUNT_NOTEBOOKS" "$MOUNT_JUPYTER"
+mkdir -p \
+  "$MOUNT_NOTEBOOKS" \
+  "$MOUNT_JUPYTER" \
+  "$MOUNT_DOT_SAGE" \
+  "$MOUNT_LOCAL" \
+  "$MOUNT_CONFIG" \
+  "$MOUNT_CACHE"
 
 # -------- Group handling --------
 if getent group "$HGID" >/dev/null 2>&1; then
@@ -126,6 +138,10 @@ fix_one_dir() {
 
 fix_one_dir "$MOUNT_NOTEBOOKS"
 fix_one_dir "$MOUNT_JUPYTER"
+fix_one_dir "$MOUNT_DOT_SAGE"
+fix_one_dir "$MOUNT_LOCAL"
+fix_one_dir "$MOUNT_CONFIG"
+fix_one_dir "$MOUNT_CACHE"
 
 echo
 echo "Done."

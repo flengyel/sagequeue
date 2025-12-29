@@ -7,20 +7,22 @@ set -euo pipefail
 #   1) create bind-mount directories (with .sagequeue-* names)
 #   2) verify ${HOME}/Jupyter/rank_boundary_sat_v18.sage exists
 #   3) run bin/fix-bind-mounts.sh (bind-mount permissions/ACLs)
-#   4) ensure podman-compose is available (installs into .venv via ./venvfix.sh if needed)
-#      and (if needed) symlinks it into /usr/local/bin for systemd visibility
-#   5) bring up the container stack via podman-compose
+#   4) ensure repo-local podman-compose exists at .venv/bin/podman-compose (via bin/venvfix.sh if needed)
+#      (does not rely on PATH; does not write to /usr/local/bin)
+#   5) bring up the container stack via repo-local podman-compose
 #   6) ensure repo scripts are executable
-#   7) enable systemd user lingering (best-effort)
+#   7) enable systemd user lingering
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 
-SERVICE="${SERVICE:-sagemath}"
-COMPOSE_FILE="${COMPOSE_FILE:-${REPO_ROOT}/podman-compose.yml}"
+# Deterministic defaults: do not allow caller environment to override these.
+SERVICE="sagemath"
+COMPOSE_FILE="${REPO_ROOT}/podman-compose.yml"
+PODMAN_COMPOSE="${REPO_ROOT}/.venv/bin/podman-compose"
 
-NOTEBOOKS_HOST="${NOTEBOOKS_HOST:-${HOME}/Jupyter}"
-SAGE_SCRIPT_HOST="${SAGE_SCRIPT_HOST:-${NOTEBOOKS_HOST}/rank_boundary_sat_v18.sage}"
+NOTEBOOKS_HOST="${HOME}/Jupyter"
+SAGE_SCRIPT_HOST="${NOTEBOOKS_HOST}/rank_boundary_sat_v18.sage"
 
 # Bind-mount state directories (must match podman-compose.yml)
 DIR_JUPYTER="${HOME}/.jupyter"
@@ -32,10 +34,10 @@ DIR_CACHE="${HOME}/.sagequeue-cache"
 # var subdirectory
 DIR_VAR="${REPO_ROOT}/var"
 
-
-FIX_PERMS="${FIX_PERMS:-1}"          # 1=run bin/fix-bind-mounts.sh; 0=skip
-DO_COMPOSE_UP="${DO_COMPOSE_UP:-1}"  # 1=podman-compose up -d; 0=skip
-DO_LINGER="${DO_LINGER:-1}"          # 1=enable linger; 0=skip
+# Deterministic toggles: do not allow env override.
+FIX_PERMS="1"          # 1=run bin/fix-bind-mounts.sh
+DO_COMPOSE_UP="1"      # 1=podman-compose up -d
+DO_LINGER="1"          # 1=enable linger
 
 log()  { printf '%s\n' "$*"; }
 warn() { printf '%s\n' "[warn] $*" >&2; }
@@ -78,54 +80,21 @@ ensure_executable() {
 }
 
 ensure_podman_compose() {
-  # Goal: "podman-compose" is callable from non-interactive contexts (systemd).
-  # If it is not installed, build .venv via venvfix.sh and then expose it.
-  if command -v podman-compose >/dev/null 2>&1; then
-    log "[ok] podman-compose found on PATH: $(command -v podman-compose)"
+  # Deterministic: always use repo-local podman-compose at ${PODMAN_COMPOSE}.
+  # If missing, create .venv via bin/venvfix.sh (the only venv builder).
+  if [[ -x "${PODMAN_COMPOSE}" ]]; then
+    log "[ok] podman-compose present: ${PODMAN_COMPOSE}"
     return 0
   fi
 
-  # If not on PATH, try repo .venv
-  if [[ -x "${REPO_ROOT}/.venv/bin/podman-compose" ]]; then
-    warn "podman-compose not on PATH; found repo venv at .venv/bin/podman-compose"
-  else
-    # Build it using venvfix.sh (repo root)
-    [[ -f "${REPO_ROOT}/venvfix.sh" ]] || die "podman-compose not found and venvfix.sh is missing in repo root"
-    ensure_executable "${REPO_ROOT}/venvfix.sh"
-    log "[run] ${REPO_ROOT}/venvfix.sh"
-    "${REPO_ROOT}/venvfix.sh"
-    [[ -x "${REPO_ROOT}/.venv/bin/podman-compose" ]] || die "venvfix.sh completed, but .venv/bin/podman-compose was not found"
-  fi
+  local venvfix="${REPO_ROOT}/bin/venvfix.sh"
+  [[ -f "${venvfix}" ]] || die "Missing venv builder: ${venvfix}"
+  ensure_executable "${venvfix}"
+  log "[run] ${venvfix}"
+  "${venvfix}"
 
-  # Expose to systemd by symlinking into /usr/local/bin (idempotent).
-  local target="${REPO_ROOT}/.venv/bin/podman-compose"
-  local link="/usr/local/bin/podman-compose"
-
-  if [[ -L "$link" || -f "$link" ]]; then
-    # If it's already correct, do nothing. If not, replace.
-    if [[ "$(readlink -f "$link" 2>/dev/null || true)" == "$(readlink -f "$target")" ]]; then
-      log "[ok] ${link} already points to repo venv podman-compose"
-    else
-      warn "${link} exists but does not point to ${target}; updating"
-      if [[ -w "$(dirname "$link")" ]]; then
-        ln -sf "$target" "$link"
-      else
-        require_cmd sudo
-        sudo ln -sf "$target" "$link"
-      fi
-    fi
-  else
-    log "[run] installing symlink: ${link} -> ${target}"
-    if [[ -w "$(dirname "$link")" ]]; then
-      ln -s "$target" "$link"
-    else
-      require_cmd sudo
-      sudo ln -s "$target" "$link"
-    fi
-  fi
-
-  command -v podman-compose >/dev/null 2>&1 || die "podman-compose still not on PATH after setup"
-  log "[ok] podman-compose now on PATH: $(command -v podman-compose)"
+  [[ -x "${PODMAN_COMPOSE}" ]] || die "venvfix.sh completed, but expected ${PODMAN_COMPOSE} was not found"
+  log "[ok] podman-compose present: ${PODMAN_COMPOSE}"
 }
 
 enable_linger() {
@@ -206,8 +175,6 @@ for d in "${DIRS_TO_CREATE[@]}"; do
   log "  ${d}"
 done
 
-
-
 step "2) Verify Sage script exists in ${NOTEBOOKS_HOST}"
 [[ -f "$SAGE_SCRIPT_HOST" ]] || die "Missing expected Sage script: ${SAGE_SCRIPT_HOST}"
 log "[ok] found ${SAGE_SCRIPT_HOST}"
@@ -224,18 +191,19 @@ else
   warn "skipping permission fix (FIX_PERMS=0)"
 fi
 
-step "4) Ensure podman-compose (assumed)"
+step "4) Ensure podman-compose (repo venv)"
 ensure_podman_compose
 
 step "5) Bring up container stack (DO_COMPOSE_UP=${DO_COMPOSE_UP})"
 if [[ "$DO_COMPOSE_UP" == "1" ]]; then
   [[ -f "$COMPOSE_FILE" ]] || die "Compose file not found: ${COMPOSE_FILE}"
-  log "[run] podman-compose -f ${COMPOSE_FILE} up -d ${SERVICE}"
-  podman-compose -f "$COMPOSE_FILE" up -d "$SERVICE"
+  log "[run] ${PODMAN_COMPOSE} -f ${COMPOSE_FILE} up -d ${SERVICE}"
+  "${PODMAN_COMPOSE}" -f "$COMPOSE_FILE" up -d "$SERVICE"
   # Verify the notebook mount is visible
   log "[run] verify mounted Sage script inside container"
-  podman exec "$SERVICE" bash -lc "test -f /home/sage/notebooks/$(basename "$SAGE_SCRIPT_HOST")" \
-    || die "Container does not see the script at /home/sage/notebooks/$(basename "$SAGE_SCRIPT_HOST")"
+  script_base="$(basename "$SAGE_SCRIPT_HOST")"
+  podman exec "$SERVICE" test -f "/home/sage/notebooks/${script_base}" \
+    || die "Container does not see the script at /home/sage/notebooks/${script_base}"
   log "[ok] container is up and sees the script"
 else
   warn "skipping compose up (DO_COMPOSE_UP=0)"
@@ -250,7 +218,6 @@ fi
 ensure_executable "${REPO_ROOT}/man-up.sh"
 ensure_executable "${REPO_ROOT}/man-down.sh"
 ensure_executable "${REPO_ROOT}/run-bash.sh"
-ensure_executable "${REPO_ROOT}/venvfix.sh"
 
 log "[ok] executable bits applied (where supported)"
 
@@ -270,3 +237,4 @@ log "Setup complete."
 log "Next:"
 log "  make CONFIG=config/shrikhande_r3.mk enable"
 log "  make CONFIG=config/shrikhande_r3.mk enqueue-stride"
+
