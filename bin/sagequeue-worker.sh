@@ -21,6 +21,16 @@ WORKER_ID="${1:-0}"
 # Host path for stop gating (NOT the container path)
 : "${STOP_FILE_HOST:?}"
 
+require_cmd() { command -v "$1" >/dev/null 2>&1 || { echo "Missing required command: $1" >&2; exit 127; }; }
+require_cmd podman
+require_cmd find
+require_cmd tee
+
+if ! [[ "$WORKER_ID" =~ ^[0-9]+$ ]]; then
+  echo "[config error] WORKER_ID must be an integer (got: $WORKER_ID)" >&2
+  exit 2
+fi
+
 # Invariant: base args must not carry partitioning. Worker injects both.
 if [[ "$SAGE_BASE_ARGS" == *"--stride"* || "$SAGE_BASE_ARGS" == *"--offset"* ]]; then
   echo "[config error] SAGE_BASE_ARGS must not include --stride or --offset." >&2
@@ -31,6 +41,14 @@ mkdir -p "$PENDING_DIR" "$RUNNING_DIR" "$DONE_DIR" "$FAILED_DIR" "$LOG_DIR"
 
 shutdown=0
 trap 'shutdown=1' TERM INT
+
+read_job_offset() {
+  local f="$1"
+  local off=""
+  off="$(grep -E '^OFFSET=' "$f" 2>/dev/null | head -n 1 | cut -d= -f2 | tr -d $'\r' || true)"
+  [[ "$off" =~ ^[0-9]+$ ]] || return 1
+  printf '%s\n' "$off"
+}
 
 # One-shot recovery before the loop (safe if also run by other workers; recover uses flock)
 "${PROJECT_ROOT}/bin/sagequeue-recover.sh" >/dev/null 2>&1 || true
@@ -65,11 +83,9 @@ while true; do
     echo "OWNER_TS=$(date -Is 2>/dev/null || date)"
   } > "$owner"
 
-  # shellcheck disable=SC1090
-  source "$runjob"
-  : "${OFFSET:?}"
-  if ! [[ "$OFFSET" =~ ^[0-9]+$ ]]; then
-    rm -f "$owner"
+  OFFSET=""
+  if ! OFFSET="$(read_job_offset "$runjob")"; then
+    rm -f "$owner" 2>/dev/null || true
     mv -f "$runjob" "$FAILED_DIR/$base"
     continue
   fi
@@ -77,16 +93,23 @@ while true; do
   logfile="$LOG_DIR/${LOG_PREFIX}_off${OFFSET}.log"
   echo "[worker $WORKER_ID] start offset=$OFFSET job=$base at $(date -Is 2>/dev/null || date)" | tee -a "$logfile"
 
-  "${PROJECT_ROOT}/bin/sagequeue-ensure-container.sh"
+  # Ensure the container is up. If this fails, treat it as a job failure (do not orphan running jobs).
+  if ! "${PROJECT_ROOT}/bin/sagequeue-ensure-container.sh"; then
+    rc=$?
+    rm -f "$owner" 2>/dev/null || true
+    echo "[worker $WORKER_ID] failed offset=$OFFSET rc=$rc reason=ensure-container at $(date -Is 2>/dev/null || date)" | tee -a "$logfile"
+    mv -f "$runjob" "$FAILED_DIR/$base"
+    continue
+  fi
 
   set +e
-  podman exec "$SERVICE" bash -lc \
-    "cd '$CONTAINER_WORKDIR' && $SAGE_BIN '$SCRIPT' $SAGE_BASE_ARGS --stride '$STRIDE' --offset '$OFFSET'" \
+  podman exec "$SERVICE" bash -c \
+    "set -euo pipefail; cd '$CONTAINER_WORKDIR' && $SAGE_BIN '$SCRIPT' $SAGE_BASE_ARGS --stride '$STRIDE' --offset '$OFFSET'" \
     </dev/null 2>&1 | tee -a "$logfile"
   rc=$?
   set -e
 
-  rm -f "$owner"
+  rm -f "$owner" 2>/dev/null || true
 
   if [[ "$rc" -eq 0 ]]; then
     echo "[worker $WORKER_ID] done offset=$OFFSET rc=$rc at $(date -Is 2>/dev/null || date)" | tee -a "$logfile"
