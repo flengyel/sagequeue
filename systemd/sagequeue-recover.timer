@@ -4,6 +4,8 @@ Description=SageQueue: periodic orphan recovery
 [Timer]
 OnBootSec=2min
 OnUnitActiveSec=5min
+AccuracySec=1s
+RandomizedDelaySec=0
 Unit=sagequeue-recover.service
 Persistent=true
 
