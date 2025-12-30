@@ -31,31 +31,37 @@ read_owner_pid() {
 )
 }
 
+ts_now() { date -Is 2>/dev/null || date; }
+
 n=0
+scanned=0
+
 for runjob in "$RUNNING_DIR"/*.env; do
+  scanned=$((scanned+1))
+
   owner="$runjob.owner"
   orphan=0
   reason=""
+  OWNER_PID=""   # reset per job to avoid leaking a previous value
 
   if [[ ! -f "$owner" ]]; then
     orphan=1
-    reason="missing owner file"
+    reason="missing_owner_file"
   else
-    OWNER_PID=""
     if OWNER_PID="$(read_owner_pid "$owner" 2>/dev/null)"; then
       if ! kill -0 "$OWNER_PID" 2>/dev/null; then
         orphan=1
-        reason="OWNER_PID not alive"
+        reason="owner_pid_dead"
       else
         args="$(ps -p "$OWNER_PID" -o args= 2>/dev/null || true)"
         if [[ "$args" != *"sagequeue-worker.sh"* ]]; then
           orphan=1
-          reason="OWNER_PID is not a sagequeue-worker.sh process"
+          reason="owner_pid_not_worker"
         fi
       fi
     else
       orphan=1
-      reason="missing/invalid OWNER_PID in owner file"
+      reason="missing_or_invalid_owner_pid"
     fi
   fi
 
@@ -63,16 +69,18 @@ for runjob in "$RUNNING_DIR"/*.env; do
     base="$(basename "$runjob")"
     rm -f "$owner" 2>/dev/null || true
 
+    ts="$(ts_now)"
+    [[ -n "$reason" ]] || reason="unknown"
+
     if mv -f "$runjob" "$PENDING_DIR/$base" 2>/dev/null; then
       n=$((n+1))
-      [[ -n "$reason" ]] || reason="unknown"
-      echo "[recover] requeued: $base reason=$reason"
+      echo "[recover] ts=$ts action=requeue job=$base reason=$reason owner_pid=${OWNER_PID:-}"
     else
-      [[ -n "$reason" ]] || reason="unknown"
-      echo "[recover] WARN: could not move back to pending: $base reason=$reason" >&2
+      echo "[recover] ts=$ts action=warn job=$base reason=$reason owner_pid=${OWNER_PID:-} error=move_failed" >&2
     fi
   fi
 done
 
-echo "[recover] requeued orphaned jobs: $n"
+ts="$(ts_now)"
+echo "[recover] ts=$ts action=summary scanned=$scanned requeued=$n"
 
