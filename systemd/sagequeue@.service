@@ -6,10 +6,11 @@ Requires=sagequeue-container.service
 [Service]
 Type=simple
 EnvironmentFile=%h/.config/sagequeue/sagequeue.env
+Environment=PATH=/usr/bin:/bin
 
 # Requeue orphans before starting (safe: recover uses flock)
-ExecStartPre=/usr/bin/env bash -c '. %h/.config/sagequeue/sagequeue.env; exec "$PROJECT_ROOT/bin/sagequeue-recover.sh"'
-ExecStart=/usr/bin/env bash -c '. %h/.config/sagequeue/sagequeue.env; exec "$PROJECT_ROOT/bin/sagequeue-worker.sh" %i'
+ExecStartPre=/bin/bash -c 'set -euo pipefail; exec "$PROJECT_ROOT/bin/sagequeue-recover.sh"'
+ExecStart=/bin/bash -c 'set -euo pipefail; exec "$PROJECT_ROOT/bin/sagequeue-worker.sh" %i'
 Restart=always
 RestartSec=2
 KillSignal=SIGTERM
