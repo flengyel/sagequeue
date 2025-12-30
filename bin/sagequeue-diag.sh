@@ -5,12 +5,39 @@ set -euo pipefail
 # Diagnostic snapshot: queue state + systemd units + container + running solver processes.
 #
 # Usage:
-#   bin/sagequeue-diag.sh
+#   bin/sagequeue-diag.sh [--env-file PATH]
 #
 # It reads the active environment file written by `make ... env`:
 #   ~/.config/sagequeue/sagequeue.env
 
-ENV_FILE="${ENV_FILE:-$HOME/.config/sagequeue/sagequeue.env}"
+usage() {
+  cat <<EOF
+Usage: ${0##*/} [--env-file PATH]
+
+Defaults:
+  --env-file \$HOME/.config/sagequeue/sagequeue.env
+EOF
+}
+
+ENV_FILE="$HOME/.config/sagequeue/sagequeue.env"
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --env-file)
+      [[ $# -ge 2 ]] || { echo "[err] --env-file requires a path" >&2; exit 2; }
+      ENV_FILE="$2"
+      shift 2
+      ;;
+    -h|--help)
+      usage
+      exit 0
+      ;;
+    *)
+      echo "[err] unknown argument: $1" >&2
+      usage >&2
+      exit 2
+      ;;
+  esac
+done
 
 if [[ ! -f "$ENV_FILE" ]]; then
   echo "[err] missing env file: $ENV_FILE" >&2
@@ -40,20 +67,20 @@ echo "STOP_FILE_CONT=$STOP_FILE_CONT"
 echo "STOP_FILE_HOST=$STOP_FILE_HOST"
 echo
 
-count_dir() {
+count_dir_env() {
   local d="$1"
   if [[ -d "$d" ]]; then
-    find "$d" -maxdepth 1 -type f 2>/dev/null | wc -l | tr -d ' '
+    find "$d" -maxdepth 1 -type f -name '*.env' 2>/dev/null | wc -l | tr -d ' '
   else
     echo 0
   fi
 }
 
 echo "== queue counts =="
-p="$(count_dir "$PENDING_DIR")"
-r="$(count_dir "$RUNNING_DIR")"
-d="$(count_dir "$DONE_DIR")"
-f="$(count_dir "$FAILED_DIR")"
+p="$(count_dir_env "$PENDING_DIR")"
+r="$(count_dir_env "$RUNNING_DIR")"
+d="$(count_dir_env "$DONE_DIR")"
+f="$(count_dir_env "$FAILED_DIR")"
 t="$((p+r+d+f))"
 echo "jobset=$JOBSET pending=$p running=$r done=$d failed=$f total=$t"
 echo
@@ -75,6 +102,7 @@ list_jobs() {
     return 0
   fi
   for fpath in "${files[@]}"; do
+    local off enq
     off="$(grep -m1 -E '^OFFSET=' "$fpath" 2>/dev/null | cut -d= -f2 || true)"
     enq="$(grep -m1 -E '^ENQUEUED_AT=' "$fpath" 2>/dev/null | cut -d= -f2- || true)"
     printf "%s offset=%s enqueued=%s\n" "$(basename "$fpath")" "${off:-?}" "${enq:-?}"
@@ -99,7 +127,7 @@ echo
 
 echo "== solver processes (inside container) =="
 pat="$(basename "$SCRIPT").py"
-podman exec "${SERVICE}" bash -lc "pgrep -af '$pat' | sed -n '1,40p'" 2>/dev/null || true
+podman exec "${SERVICE}" bash -c 'set -euo pipefail; pat="$1"; pgrep -af "$pat" | sed -n "1,40p"' -- "$pat" 2>/dev/null || true
 echo
 
 echo "== last log lines (per offset) =="
@@ -117,3 +145,4 @@ if [[ -d "$LOG_DIR" ]]; then
 else
   echo "[missing log dir]"
 fi
+
