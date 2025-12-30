@@ -56,7 +56,7 @@ read_job_offset() {
 while true; do
   [[ "$shutdown" -eq 0 ]] || exit 0
 
-  # Stop file prevents *new* job claims; Sage itself handles stop_file while running.
+  # Stop file prevents *new* job claims; Sage itself also checks stop_file while running.
   if [[ -f "${STOP_FILE_HOST}" ]]; then
     sleep "${SLEEP_EMPTY:-2}"
     continue
@@ -93,11 +93,21 @@ while true; do
   logfile="$LOG_DIR/${LOG_PREFIX}_off${OFFSET}.log"
   echo "[worker $WORKER_ID] start offset=$OFFSET job=$base at $(date -Is 2>/dev/null || date)" | tee -a "$logfile"
 
-  # Ensure the container is up. If this fails, treat it as a job failure (do not orphan running jobs).
-  if ! "${PROJECT_ROOT}/bin/sagequeue-ensure-container.sh"; then
+  # Stop requested after claim: put the job back and do not run Sage.
+  if [[ -f "${STOP_FILE_HOST}" ]]; then
+    rm -f "$owner" 2>/dev/null || true
+    echo "[worker $WORKER_ID] pause offset=$OFFSET reason=stop_file_before_exec at $(date -Is 2>/dev/null || date)" | tee -a "$logfile"
+    mv -f "$runjob" "$PENDING_DIR/$base"
+    continue
+  fi
+
+  # Ensure the container is up. Log its output into the offset logfile.
+  if "${PROJECT_ROOT}/bin/sagequeue-ensure-container.sh" >>"$logfile" 2>&1; then
+    :
+  else
     rc=$?
     rm -f "$owner" 2>/dev/null || true
-    echo "[worker $WORKER_ID] failed offset=$OFFSET rc=$rc reason=ensure-container at $(date -Is 2>/dev/null || date)" | tee -a "$logfile"
+    echo "[worker $WORKER_ID] failed offset=$OFFSET rc=$rc reason=ensure_container at $(date -Is 2>/dev/null || date)" | tee -a "$logfile"
     mv -f "$runjob" "$FAILED_DIR/$base"
     continue
   fi
@@ -110,6 +120,14 @@ while true; do
   set -e
 
   rm -f "$owner" 2>/dev/null || true
+
+  # If a stop was requested, Sage may exit cleanly (rc=0) before completion.
+  # Do NOT mark done in that case; requeue to pending so it resumes later.
+  if [[ "$rc" -eq 0 && -f "${STOP_FILE_HOST}" ]]; then
+    echo "[worker $WORKER_ID] pause offset=$OFFSET rc=$rc reason=stop_file at $(date -Is 2>/dev/null || date)" | tee -a "$logfile"
+    mv -f "$runjob" "$PENDING_DIR/$base"
+    continue
+  fi
 
   if [[ "$rc" -eq 0 ]]; then
     echo "[worker $WORKER_ID] done offset=$OFFSET rc=$rc at $(date -Is 2>/dev/null || date)" | tee -a "$logfile"
