@@ -16,6 +16,8 @@ Top-level:
 - `var/` — durable queue + logs (gitignored).
 - `man-up.sh`, `man-down.sh`, `run-bash.sh` — container convenience helpers.
 - `requirements.txt` — repo-local `.venv` with `podman-compose` (so `systemd --user` can find it). The venv is created by `bin/setup.sh` via `bin/venvfix.sh`.
+- `sagequeue-progress.py` — progress monitor: reads `~/.config/sagequeue/sagequeue.env` plus `${HOME}/Jupyter/state_*` files written by `rank_boundary_sat_v18.sage` (via `--resume`) and reports per-offset completion against the total (e.g. `C(15,12)=455`).
+
 
 `bin/`:
 
@@ -136,7 +138,11 @@ make CONFIG=config/shrikhande_r3.mk enqueue-stride
 ```bash
 make CONFIG=config/shrikhande_r3.mk progress
 make CONFIG=config/shrikhande_r3.mk logs
+python3 sagequeue-progress.py
 ```
+
+- `make progress` reports queue directory counts.
+- `sagequeue-progress.py` reports case progress (e.g., 81/455) from the Sage state files.
 
 A full snapshot:
 
@@ -225,11 +231,11 @@ stateDiagram-v2
   P --> R: claim
   R --> D: rc==0
   R --> F: rc!=0
-  F --> P: retry-failed
-  R --> P: recover (orphan)
+  F --> P: retry (recover, bounded) / retry-failed
+  R --> P: recover (orphan) / pause (stop_file)
 ```
 
-**Transition meanings (what actually happens on disk):**
+**Transition meanings (on disk):**
 
 - **enqueue (create `*.env`)**
   `make … enqueue-stride` writes one job file per offset into `var/{JOBSET}/queue/pending/`, e.g. `shri_r3_off7.env` containing at least `OFFSET=7` (and `ENQUEUED_AT=...`).
@@ -254,6 +260,17 @@ stateDiagram-v2
 - **retry-failed (`failed → pending`)**
   `make … retry-failed` moves every `*.env` file from `failed/` back to `pending/` so workers will rerun them.
 
+- **retry (recover, capped) (`failed → pending`)**
+  `sagequeue-recover.timer` runs `bin/sagequeue-recover.sh`, which also scans `failed/*.env` and retries them automatically by moving them back to `pending/`.
+  Each retry updates the job file in place by adding/updating:
+  - `ATTEMPTS=<n>`
+  - `LAST_RETRY_TS=<timestamp>`
+  Once `ATTEMPTS` reaches the script’s `MAX_FAILED_RETRIES`, recovery leaves the job in `failed/` and logs `action=hold_failed`.
+
+- **pause (stop_file) (`running → pending`)**
+  If the host stop file exists and Sage exits cleanly due to `--stop_file`, the worker requeues the job to `pending/` (it will resume after `clear-stop`).
+  Workers also avoid starting a newly claimed job if the stop file appears between claim and `podman exec`.
+
 - **recover (orphan) (`running → pending`)**
   Recovery scans `running/*.env` and treats a job as orphaned if its `*.owner` file is missing, cannot be sourced, the recorded `OWNER_PID` is not alive (`kill -0` fails), or that PID is alive but is no longer a `sagequeue-worker.sh` process.
   For each orphaned job, recovery removes any stale `*.owner` and moves:
@@ -277,10 +294,9 @@ When a worker claims a job (`pending → running`), it writes `<job>.env.owner` 
 The recovery script (`bin/sagequeue-recover.sh`) scans `running/*.env` and treats a job as **orphaned** if **any** of the following is true:
 
 1. the `.owner` file is missing, or
-2. the `.owner` file exists but cannot be sourced, or
-3. `OWNER_PID` is missing, or
-4. `kill -0 $OWNER_PID` fails (worker PID no longer exists), or
-5. the PID exists but `ps -p $OWNER_PID -o args=` does not contain `sagequeue-worker.sh`
+2. the `.owner` file does not contain a valid `OWNER_PID=<integer>` line (recovery does **not** `source` the owner file), or
+3. `kill -0 $OWNER_PID` fails (worker PID no longer exists), or
+4. the PID exists but `ps -p $OWNER_PID -o args=` does not contain `sagequeue-worker.sh`
    (PID has been reused for some other process)
 
 For each orphaned job, recovery performs the state transition:
@@ -298,7 +314,13 @@ Where recovery runs:
 
 What recovery **does not** do: it does not inspect whether a container-side solver process is still running. Ownership is defined strictly in terms of the host worker PID recorded in the `.owner` file.
 
+Recovery logging is grep/awk-friendly by design. Example audit commands:
 
+```bash
+journalctl --user -u sagequeue-recover.service -n 200 -o cat | grep '^\[recover\]'
+journalctl --user -u sagequeue-recover.service -o cat | grep 'action=retry_failed'
+journalctl --user -u sagequeue-recover.service -o cat | grep 'action=hold_failed'
+```
 
 ### Configuration contract
 
@@ -375,6 +397,11 @@ make CONFIG=config/shrikhande_r3.mk requeue-running
 ```bash
 make CONFIG=config/shrikhande_r3.mk retry-failed
 ```
+
+Failed jobs are also retried automatically by `sagequeue-recover.timer` up to `MAX_FAILED_RETRIES` 
+(tracked in each job file as `ATTEMPTS=` / `LAST_RETRY_TS=`). Once the maximum is reached, recovery 
+leaves the job in `failed/` and logs `action=hold_failed`.
+
 
 ### Procedure: destructive reset of the jobset queue
 
