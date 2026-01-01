@@ -156,6 +156,39 @@ Logs land in:
 - …
 - `var/shri_r3/log/shri_r3_off7.log`
 
+
+### 6) Template workload (smoke test; no SAT workload)
+
+This repository includes a deterministic stride/offset **smoke test** workload script:
+
+- **Repo copy:** `Jupyter/template.sage` (i.e., `$PROJECT_ROOT/Jupyter/template.sage`)
+- **Runtime copy (host bind mount):** `${HOME}/Jupyter/template.sage`
+- **Container path:** `/home/sage/notebooks/template.sage`
+
+Because `podman-compose.yml` bind-mounts `${HOME}/Jupyter` to `/home/sage/notebooks`, the container (and therefore the workers) can only run `template.sage` if it exists in `${HOME}/Jupyter`.
+
+From the repo root, copy the template into the notebook mount:
+
+```bash
+cp -f ./Jupyter/template.sage "$HOME/Jupyter/template.sage"
+````
+
+Then run the template jobset:
+
+```bash
+make CONFIG=config/template.mk enable
+make CONFIG=config/template.mk enqueue-stride
+```
+
+Monitor with the standard commands:
+
+```bash
+make CONFIG=config/template.mk progress
+make CONFIG=config/template.mk logs
+make CONFIG=config/template.mk diag
+```
+
+
 ## How jobsets work (config/*.mk)
 
 A jobset config sets (at minimum):
