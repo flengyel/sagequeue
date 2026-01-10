@@ -12,7 +12,7 @@ PORT="${PORT:-8888}"
 
 usage() {
   cat <<'USAGE'
-Usage: ./man-up.sh [--no-follow] [--open]
+Usage: ./man-up.sh [--follow] [--open]
 
   --no-follow   Start the stack but do not follow logs (returns immediately).
   --open        Try to open http://localhost:8888 in the default Windows browser.
@@ -23,11 +23,11 @@ Environment:
 USAGE
 }
 
-FOLLOW=1
+FOLLOW=0
 OPEN=0
 while [[ $# -gt 0 ]]; do
   case "$1" in
-    --no-follow|-n) FOLLOW=0 ;;
+    --follow|-f) FOLLOW=1 ;;
     --open|-o)      OPEN=1 ;;
     --help|-h)      usage; exit 0 ;;
     *)
