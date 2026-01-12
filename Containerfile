@@ -11,7 +11,8 @@
 #   image: localhost/sagequeue-sagemath:${SAGE_TAG:-10.7}-pycryptosat
 
 ARG SAGE_TAG=10.7
-FROM ghcr.io/sagemath/sage/sage-debian-bullseye-standard-with-targets-optional:${SAGE_TAG}
+ARG SAGE_BASE_IMAGE=ghcr.io/sagemath/sage/sage-debian-bullseye-standard-with-targets-optional:${SAGE_TAG}
+FROM ${SAGE_BASE_IMAGE}
 
 # Build dependencies for a source install of pycryptosat.
 USER root
@@ -24,6 +25,19 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 RUN mkdir -p /home/sage && chown -R 1000:1000 /home/sage
 ENV HOME=/home/sage
 ENV DOT_SAGE=/home/sage/.sage
+
+# Ensure repo runtime contract: WORKDIR=/sage and SAGE_BIN=./sage.
+# If the base image provides `sage` on PATH, link it into /sage/sage.
+RUN mkdir -p /sage && chown -R 1000:1000 /sage
+USER 1000:1000
+RUN if [ ! -x /sage/sage ]; then \
+      if command -v sage >/dev/null 2>&1; then \
+        ln -sf "$(command -v sage)" /sage/sage; \
+      else \
+        echo "[err] no /sage/sage and no sage on PATH in base image" >&2; exit 1; \
+      fi; \
+    fi
+WORKDIR /sage
 
 # Install pycryptosat inside Sage's Python environment.
 USER 1000:1000
