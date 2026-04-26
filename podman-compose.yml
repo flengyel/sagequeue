@@ -11,6 +11,7 @@ services:
     # image: docker.io/sagemath/sagemath:${SAGE_TAG:-10.7}
 
     container_name: sagemath
+    network_mode: ${SAGEQUEUE_NETWORK_MODE:-slirp4netns}
 
     working_dir: /sage
     user: "1000:1000"
