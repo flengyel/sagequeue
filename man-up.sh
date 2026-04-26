@@ -9,6 +9,9 @@ COMPOSE_FILE="${SCRIPT_DIR}/podman-compose.yml"
 
 CONTAINER_NAME="${CONTAINER_NAME:-sagemath}"
 PORT="${PORT:-8888}"
+SAGE_TAG="${SAGE_TAG:-10.7}"
+IMAGE="${IMAGE:-localhost/sagequeue-sagemath:${SAGE_TAG}-pycryptosat}"
+BUILD_IMAGE="${BUILD_IMAGE:-${SCRIPT_DIR}/bin/build-image.sh}"
 
 usage() {
   cat <<'USAGE'
@@ -71,7 +74,16 @@ if ! podman ps >/dev/null 2>&1; then
 fi
 
 # Create bind-mount directories expected by podman-compose.yml (safe if they already exist).
-mkdir -p "$HOME/Jupyter" "$HOME/.jupyter"
+mkdir -p "$HOME/Jupyter" "$HOME/.jupyter" "$HOME/.sagequeue-dot_sage" "$HOME/.sagequeue-local" "$HOME/.sagequeue-config" "$HOME/.sagequeue-cache"
+
+# Ensure the local Sage image exists before compose can try to pull localhost/...
+if ! podman image exists "$IMAGE"; then
+  if [[ ! -x "$BUILD_IMAGE" ]]; then
+    echo "Missing executable image builder: $BUILD_IMAGE" >&2
+    exit 2
+  fi
+  "$BUILD_IMAGE" --sage-tag "$SAGE_TAG"
+fi
 
 # Start / update the stack.
 "$PODMAN_COMPOSE" -f "${COMPOSE_FILE}" up -d
