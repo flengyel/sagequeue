@@ -22,6 +22,10 @@ fi
 # Prefer the repo-local venv podman-compose if it exists.
 if [[ -x "${SCRIPT_DIR}/.venv/bin/podman-compose" ]]; then
   PODMAN_COMPOSE="${SCRIPT_DIR}/.venv/bin/podman-compose"
+elif [[ -x "${SCRIPT_DIR}/bin/podman-compose" ]]; then
+  PODMAN_COMPOSE="${SCRIPT_DIR}/bin/podman-compose"
+elif [[ -x "${HOME}/src/sagequeue/.venv/bin/podman-compose" ]]; then
+  PODMAN_COMPOSE="${HOME}/src/sagequeue/.venv/bin/podman-compose"
 else
   if ! command -v podman-compose >/dev/null 2>&1; then
     echo "podman-compose not found. If you haven't built the venv, run: ./venvfix.sh" >&2
