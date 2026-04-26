@@ -77,19 +77,23 @@ if grep -q "/home/sage/\.sage" "$COMPOSE_FILE"; then
     "$IMAGE" \
     bash -c '
       set -euo pipefail
-      # NOTE: /home/sage/.sage is often bind-mounted from the host in podman-compose.yml.
-      # We avoid Python quoting pitfalls here and discover the pythonX.Y site-packages path via globbing.
-      SRC=""
-      for d in /home/sage/.sage/local/lib/python*/site-packages; do
-        if [[ -d "$d" ]]; then SRC="$d"; break; fi
-      done
-      [[ -n "$SRC" ]] || { echo "[seed] could not find site-packages under /home/sage/.sage/local/lib" >&2; exit 1; }
-      PYDIR="$(basename "$(dirname "$SRC")")"   # e.g. python3.12
-      DST="/seed/local/lib/${PYDIR}/site-packages"
-      mkdir -p "$DST"
-      rm -f "$DST"/pycryptosat* 2>/dev/null || true
-      cp -a "$SRC"/pycryptosat* "$DST"/
-      echo "[ok] seeded pycryptosat into host DOT_SAGE at $DST"
+      # In current Sage images, pycryptosat is installed in the Sage venv under /sage/local,
+      # not under /home/sage/.sage. If it is outside DOT_SAGE, no host seeding is needed.
+      SRC="$(cd /sage && ./sage -python -c "import pathlib, pycryptosat; print(pathlib.Path(pycryptosat.__file__).parent)")"
+      case "$SRC" in
+        /home/sage/.sage/local/lib/python*/site-packages)
+          PYDIR="$(basename "$(dirname "$SRC")")"   # e.g. python3.12
+          DST="/seed/local/lib/${PYDIR}/site-packages"
+          mkdir -p "$DST"
+          rm -f "$DST"/pycryptosat* 2>/dev/null || true
+          cp -a "$SRC"/pycryptosat* "$DST"/
+          echo "[ok] seeded pycryptosat into host DOT_SAGE at $DST"
+          ;;
+        *)
+          echo "[ok] pycryptosat is installed outside bind-mounted DOT_SAGE: $SRC"
+          echo "[ok] no DOT_SAGE seed needed"
+          ;;
+      esac
     '
 else
   echo "[seed] no /home/sage/.sage bind mount detected in ${COMPOSE_FILE}; skipping seed"
