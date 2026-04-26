@@ -20,6 +20,9 @@ REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 SERVICE="sagemath"
 COMPOSE_FILE="${REPO_ROOT}/podman-compose.yml"
 PODMAN_COMPOSE="${REPO_ROOT}/.venv/bin/podman-compose"
+SAGE_TAG="10.7"
+IMAGE="localhost/sagequeue-sagemath:${SAGE_TAG}-pycryptosat"
+BUILD_IMAGE="${REPO_ROOT}/bin/build-image.sh"
 
 NOTEBOOKS_HOST="${HOME}/Jupyter"
 SAGE_SCRIPT_HOST="${NOTEBOOKS_HOST}/rank_boundary_sat_v18.sage"
@@ -196,6 +199,14 @@ ensure_podman_compose
 
 step "5) Bring up container stack (DO_COMPOSE_UP=${DO_COMPOSE_UP})"
 if [[ "$DO_COMPOSE_UP" == "1" ]]; then
+  if ! podman image exists "$IMAGE"; then
+    [[ -x "$BUILD_IMAGE" ]] || die "Missing executable image builder: ${BUILD_IMAGE}"
+    log "[run] ${BUILD_IMAGE} --sage-tag ${SAGE_TAG}"
+    "${BUILD_IMAGE}" --sage-tag "$SAGE_TAG"
+  else
+    log "[ok] local image present: ${IMAGE}"
+  fi
+
   [[ -f "$COMPOSE_FILE" ]] || die "Compose file not found: ${COMPOSE_FILE}"
   log "[run] ${PODMAN_COMPOSE} -f ${COMPOSE_FILE} up -d ${SERVICE}"
   "${PODMAN_COMPOSE}" -f "$COMPOSE_FILE" up -d "$SERVICE"
