@@ -7,6 +7,11 @@ set -euo pipefail
 : "${CONTAINER_WORKDIR:?}"
 : "${SAGE_BIN:?}"
 
+REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+SAGE_TAG="${SAGE_TAG:-10.7}"
+IMAGE="${IMAGE:-localhost/sagequeue-sagemath:${SAGE_TAG}-pycryptosat}"
+BUILD_IMAGE="${BUILD_IMAGE:-${REPO_ROOT}/bin/build-image.sh}"
+
 require_cmd() { command -v "$1" >/dev/null 2>&1 || { echo "Missing required command: $1" >&2; exit 127; }; }
 require_cmd podman
 
@@ -19,6 +24,14 @@ if [[ ! -x "$PODMAN_COMPOSE" ]]; then
   echo "podman-compose not executable: $PODMAN_COMPOSE" >&2
   echo "run: $(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/bin/setup.sh" >&2
   exit 2
+fi
+
+if ! podman image exists "$IMAGE"; then
+  [[ -x "$BUILD_IMAGE" ]] || {
+    echo "Missing executable image builder: $BUILD_IMAGE" >&2
+    exit 2
+  }
+  "$BUILD_IMAGE" --sage-tag "$SAGE_TAG"
 fi
 
 "$PODMAN_COMPOSE" -f "$COMPOSE_FILE" up -d "$SERVICE"
