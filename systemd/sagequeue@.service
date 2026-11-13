@@ -1,7 +1,5 @@
 [Unit]
 Description=SageQueue worker %i
-After=sagequeue-container.service
-Requires=sagequeue-container.service
 
 [Service]
 Type=simple

@@ -1,12 +1,11 @@
-# podman-compose wiring
-COMPOSE_FILE        ?= podman-compose.yml
-SERVICE             ?= sagemath
+# SagePod dependency
+SERVICE             ?= sagepod
 
 # Inside-container execution
 CONTAINER_WORKDIR   ?= /sage
 SAGE_BIN            = ./sage
 
-# Notebook bind mount locations (matches podman-compose.yml)
+# SagePod notebook mount locations
 NOTEBOOKS_CONT      ?= /home/sage/notebooks
 NOTEBOOKS_HOST      ?= $(HOME)/Jupyter
 

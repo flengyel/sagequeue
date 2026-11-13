@@ -1,0 +1,17 @@
+[Unit]
+Description=SageQueue batch worker %i using SagePod
+
+[Service]
+Type=simple
+# Create ~/.config/sagequeue/worker.env with absolute paths, for example:
+# SAGEQUEUE_CLI=/home/NAME/src/sagequeue/sagequeue.py
+# SAGEQUEUE_NOTEBOOKS=/home/NAME/Jupyter
+# SAGEQUEUE_ROOT=/home/NAME/Jupyter/sagequeue-runs
+EnvironmentFile=%h/.config/sagequeue/worker.env
+ExecStart=/usr/bin/python3 ${SAGEQUEUE_CLI} --notebooks ${SAGEQUEUE_NOTEBOOKS} --root ${SAGEQUEUE_ROOT} worker --slot %i
+Restart=on-failure
+RestartSec=5
+TimeoutStopSec=infinity
+
+[Install]
+WantedBy=default.target

@@ -1,2 +1,3 @@
-#!/bin/bash
-podman exec -it sagemath /bin/bash
+#!/usr/bin/env bash
+set -euo pipefail
+exec podman exec -it "${SAGEPOD_CONTAINER:-sagepod}" bash

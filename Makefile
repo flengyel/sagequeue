@@ -8,7 +8,6 @@ MAKEFLAGS += --no-builtin-rules
 # Project root = directory containing this Makefile
 PROJECT_ROOT := $(abspath $(dir $(firstword $(MAKEFILE_LIST))))
 # Ignore host environment overrides for repo wiring.
-undefine COMPOSE_FILE
 undefine SERVICE
 undefine SAGE_BIN
 undefine SAGE_BASE_ARGS
@@ -18,9 +17,6 @@ undefine SAGE_BASE_ARGS
 CONFIG ?= config/shrikhande_r3.mk
 include $(CONFIG)
 
-# Resolve compose file absolute path (systemd-safe)
-COMPOSE_FILE_ABS := $(abspath $(if $(filter /%,$(COMPOSE_FILE)),$(COMPOSE_FILE),$(PROJECT_ROOT)/$(COMPOSE_FILE)))
-PODMAN_COMPOSE_ABS := $(abspath $(PROJECT_ROOT)/.venv/bin/podman-compose)
 
 
 
@@ -39,7 +35,7 @@ ENV_DIR  := $(HOME)/.config/sagequeue
 ENV_FILE := $(ENV_DIR)/sagequeue.env
 
 SYSTEMD_USER_DIR := $(HOME)/.config/systemd/user
-UNITS := sagequeue-container.service sagequeue-recover.service sagequeue-recover.timer sagequeue@.service
+UNITS := sagequeue-recover.service sagequeue-recover.timer sagequeue@.service
 
 .PHONY: help print-config check setup env install-systemd uninstall-systemd \
         enable disable start stop restart status journal logs progress \
@@ -58,7 +54,6 @@ print-config: ## Show resolved config values.
 	echo "STRIDE=$(STRIDE)"
 	echo "WORKERS=$(WORKERS)"
 	echo "SERVICE=$(SERVICE)"
-	echo "COMPOSE_FILE=$(COMPOSE_FILE_ABS)"
 	echo "SCRIPT_CONT=$(SCRIPT_CONT)"
 	echo "STOP_FILE_CONT=$(STOP_FILE_CONT)"
 	echo "STOP_FILE_HOST=$(STOP_FILE_HOST)"
@@ -72,10 +67,8 @@ check: ## Verify required commands/files exist.
 	command -v tee >/dev/null
 	command -v find >/dev/null
 	command -v flock >/dev/null
-	test -f "$(COMPOSE_FILE_ABS)"
-	test -x "$(PODMAN_COMPOSE_ABS)"
 	test -x "$(PROJECT_ROOT)/bin/sagequeue-worker.sh" || true
-	echo "[ok] toolchain present and compose file found"
+	echo "[ok] host queue tools present"
 
 setup: ## Create queue/log/run directories for this jobset.
 	mkdir -p "$(PENDING_DIR)" "$(RUNNING_DIR)" "$(DONE_DIR)" "$(FAILED_DIR)" "$(RUN_DIR)" "$(LOG_DIR)"
@@ -97,8 +90,6 @@ env: setup ## Write systemd EnvironmentFile at $(ENV_FILE) for the selected conf
 	RUN_DIR=$(RUN_DIR)
 	LOG_DIR=$(LOG_DIR)
 	
-	COMPOSE_FILE=$(COMPOSE_FILE_ABS)
-	PODMAN_COMPOSE=$(PODMAN_COMPOSE_ABS)
 	SERVICE=$(SERVICE)
 	
 	CONTAINER_WORKDIR=$(CONTAINER_WORKDIR)
@@ -130,26 +121,23 @@ uninstall-systemd: ## Remove systemd user units
 	systemctl --user daemon-reload
 	echo "[ok] removed units from $(SYSTEMD_USER_DIR)"
 
-enable: check env install-systemd ## Enable + start container, recover timer, and WORKERS worker instances.
-	systemctl --user enable --now sagequeue-container.service
+enable: check env install-systemd ## Enable recovery and WORKERS worker instances.
 	systemctl --user enable --now sagequeue-recover.timer
 	for i in $$(seq 1 "$(WORKERS)"); do \
 	  systemctl --user enable --now "sagequeue@$$i.service"; \
 	done
-	echo "[ok] enabled container + timer + $(WORKERS) workers"
+	echo "[ok] enabled timer + $(WORKERS) workers"
 	echo "If you want these to run after reboot without logging in:"
 	echo "  loginctl enable-linger $$USER"
 
-disable: ## Stop + disable workers, timer, container.
+disable: ## Stop and disable workers and recovery.
 	for i in $$(seq 1 "$(WORKERS)"); do \
 	  systemctl --user disable --now "sagequeue@$$i.service" || true; \
 	done
 	systemctl --user disable --now sagequeue-recover.timer || true
-	systemctl --user disable --now sagequeue-container.service || true
 	echo "[ok] disabled services"
 
-start: check env ## Start container + recover + workers (does not enable).
-	systemctl --user start sagequeue-container.service
+start: check env ## Start recovery and workers (does not enable).
 	systemctl --user start sagequeue-recover.service
 	for i in $$(seq 1 "$(WORKERS)"); do \
 	  systemctl --user start "sagequeue@$$i.service"; \
@@ -169,7 +157,6 @@ restart: check env ## Restart workers (reload env/config).
 	echo "[ok] restarted workers"
 
 status: ## Show systemd status + queue counts.
-	systemctl --user --no-pager status sagequeue-container.service || true
 	systemctl --user --no-pager status sagequeue-recover.timer || true
 	for i in $$(seq 1 "$(WORKERS)"); do \
 	  systemctl --user --no-pager status "sagequeue@$$i.service" || true; \
