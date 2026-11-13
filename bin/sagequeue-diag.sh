@@ -2,4 +2,4 @@
 set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 python3 "$ROOT/sagequeue.py" doctor
-python3 "$ROOT/sagequeue.py" status --json
+python3 "$ROOT/sagequeue.py" tasks status --json

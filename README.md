@@ -1,9 +1,9 @@
 # SageQueue
 
-SageQueue submits and manages batch jobs in an existing
+SageQueue manages batch tasks in a running
 [SagePod](https://github.com/flengyel/sagepod) instance. SagePod supplies
 SageMath 10.10, CryptoMiniSat, Jupyter, and the container. SageQueue supplies
-the durable job queue, workers, resource controls, and logs.
+task submission, partitions, workers, resource controls, and logs.
 
 ## Install
 
@@ -18,78 +18,78 @@ sagequeue doctor
 ```
 
 SageQueue needs Python 3.10 or newer and rootless Podman on Linux or WSL2.
-It uses Python's standard library. It has no container image, Compose stack,
-or Sage installation of its own. Setup installs a command symlink under
-`~/.local/bin` and checks the running SagePod dependency.
+It uses Python's standard library and SagePod's existing runtime. Setup
+installs `~/.local/bin/sagequeue` and checks the SagePod connection.
 
-## Submit a job
+## Tasks, partitions, and workers
+
+A **partition** is a numbered portion of an experiment. A **task** is a
+scheduled execution of a script, optionally assigned a partition. A
+**worker** runs one task at a time. Eight partitions can run through two
+workers; partition count and concurrency are separate choices.
 
 Keep scripts and their imported project files under `~/Jupyter`:
 
 ```bash
-sagequeue submit --name experiment --cpus 1 --memory 2G --time 2h \
+sagequeue tasks submit --name experiment --cpus 1 --memory 2G --time 2h \
   ~/Jupyter/project/search.py --resume
-sagequeue status
-sagequeue logs 1 --follow
-sagequeue cancel 1
-sagequeue retry 1
+sagequeue tasks
+sagequeue tasks logs 1 --follow
+sagequeue tasks cancel 1
+sagequeue tasks retry 1
 ```
 
-Submission prints a numeric job ID and starts a background worker. Options
-before the script configure the job; later arguments belong to the script.
-The default working directory is the script's directory. Both `.py` and
-`.sage` scripts run with SagePod's Sage environment.
+Submission prints a numeric job ID. Options before the script configure
+the task; later arguments belong to the script. The default working
+directory is the script's directory. Both `.py` and `.sage` scripts run
+with SagePod's Sage environment.
+
+For a partitioned job array:
+
+```bash
+sagequeue tasks submit --hold --partitions 8 ~/Jupyter/project/search.py
+sagequeue partitions 2
+sagequeue workers start --workers 2
+sagequeue tasks logs 2.3 --follow
+sagequeue tasks cancel 2
+```
+
+The array receives one job ID, here `2`; its tasks are `2.0` through `2.7`.
+`cancel 2` affects the array, while `cancel 2.3` affects one task. To select
+an arithmetic progression, use `--array 0-31:2`; comma-separated IDs and
+ranges are also accepted. The script receives partition and task IDs as
+environment variables. See [commands](docs/commands.md).
 
 | Command | Purpose |
 | --- | --- |
-| `sagequeue submit SCRIPT [ARGS...]` | Submit and start processing. |
-| `sagequeue status [ID...]` | Inspect queue and completion states. |
-| `sagequeue logs ID [-f] [--stderr]` | Read output or follow progress. |
-| `sagequeue cancel ID` | Cancel a queued or running job. |
-| `sagequeue retry ID` | Retry a failed, cancelled, or timed-out job. |
-| `sagequeue start --workers N` | Select worker concurrency. |
-| `sagequeue stop` | Stop workers after their current jobs. |
+| `sagequeue tasks submit SCRIPT [ARGS...]` | Submit a task or job array. |
+| `sagequeue tasks [status] [ID...]` | List task states. |
+| `sagequeue tasks logs ID [-f] [--stderr]` | Read or follow a task log. |
+| `sagequeue tasks cancel ID` | Cancel a job array or one task. |
+| `sagequeue tasks retry ID` | Retry failed, cancelled, or timed-out tasks. |
+| `sagequeue partitions [ID...]` | Inspect partition assignments. |
+| `sagequeue workers [status]` | Inspect worker slots. |
+| `sagequeue workers start --workers N` | Start worker slots. |
+| `sagequeue workers stop` | Stop workers after their current tasks. |
 | `sagequeue doctor` | Check SagePod and solver versions. |
 
-The defaults are one worker, one CPU, a 2048 MiB address-space limit per
-process, and a one-hour wall limit per job. Workers do not reserve total
-host memory; choose concurrency to fit the machine and its notebook work.
-See [commands and resource controls](docs/commands.md) for full behavior.
+## Resource controls and recovery
 
-## Queue records
+The defaults are one worker, one CPU per task, a 2048 MiB address-space
+limit per process, and a one-hour wall limit. Workers do not reserve total
+host memory; choose concurrency to fit the machine and notebook workload.
+The [command reference](docs/commands.md) states the resource limits.
 
-Jobs, separate output/error logs, and completion records are stored under
-`~/Jupyter/sagequeue-runs`. Each retry retains its preceding attempt's logs.
-Atomic claims prevent duplicate execution. If a worker stops while the
-container job continues, a replacement worker can adopt that job. A lost
-runtime is recorded as a failure and is retried only on request. Experiments
-retain responsibility for their own solver checkpoints.
+Jobs and attempt logs are saved under `~/Jupyter/sagequeue-runs`.
+Retries retain earlier logs. Atomic claims prevent duplicate execution.
+A replacement worker can adopt a task whose container process is still
+running. A lost runtime is recorded as a failure and is retried on request.
+Experiments retain responsibility for their own solver checkpoints.
 
-Workers can run in the background or under the supplied
+Workers run in the background or under the supplied
 [user-service template](systemd/sagequeue-worker@.service). SagePod must be
-running before workers start. Queue commands do not start, rebuild, or stop
-SagePod.
-
-## Partitioned jobsets
-
-The Makefile interface supports experiments with stride/offset partitions.
-The script must accept `--stride`, `--offset`, and the configured checkpoint
-and stop-file options. Place it under `~/Jupyter`, select its settings in a
-`config/*.mk` file, and run:
-
-```bash
-make CONFIG=config/template.mk enable
-make CONFIG=config/template.mk enqueue-stride
-make CONFIG=config/template.mk progress
-make CONFIG=config/template.mk logs
-make CONFIG=config/template.mk request-stop
-```
-
-This interface also uses container `sagepod`. Its per-jobset queue and logs
-are under `var/<JOBSET>`. Its user services supervise queue workers and
-recovery; SagePod supplies the runtime. The generic `submit` interface and
-partitioned jobsets have separate queue records. Avoid submitting the same
-checkpoint partition through both interfaces.
+running before workers start. Queue commands do not build, restart, or
+remove the SagePod container.
 
 ## Validation
 
@@ -98,10 +98,8 @@ python3 -m unittest discover -s tests -v
 sagequeue doctor
 ```
 
-The automated tests use a process-level Podman substitute to exercise
-submission, literal arguments, logs, cancellation, timeouts, concurrent
-claims, retries, and adoption after a host worker is killed. They do not
-replace a SagePod runtime check. The setup command and `doctor` perform that
-check on the installed machine.
+Automated tests use a process-level Podman substitute for task submission,
+arrays, cancellation, timeouts, concurrent claims, retries, and worker
+recovery. The `doctor` command checks the installed SagePod runtime.
 
 [Migration guide](docs/migration.md) · [License](LICENSE)

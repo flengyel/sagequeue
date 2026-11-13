@@ -763,14 +763,14 @@ def main():
 
     ap.add_argument("--J", type=str, default="", help="comma-separated pivot rows J (size kdim)")
     ap.add_argument("--scan_all_J", action="store_true", help="scan all J subsets (early-exit on SAT)")
-    ap.add_argument("--offset", type=int, default=0, help="process J with index ≡ offset (mod stride)")
-    ap.add_argument("--stride", type=int, default=1, help="stride for parallel scanning")
+    ap.add_argument("--partition", type=int, default=int(os.environ.get("SAGEQUEUE_PARTITION", "0")), help="partition ID supplied by SageQueue")
+    ap.add_argument("--partitions", type=int, default=int(os.environ.get("SAGEQUEUE_PARTITIONS", "1")), help="total number of search partitions")
 
     ap.add_argument("--resume", action="store_true",
                     help="During --scan_all_J: resume from per-worker state_file (skip gidx <= last_done).")
     ap.add_argument("--state_file", type=str, default="",
                     help="During --scan_all_J: per-worker state file (stores last DONE gidx). "
-                         "If empty, defaults to /home/sage/notebooks/state_{graph}_r{r}_stride{stride}_off{offset}.txt")
+                         "If empty, defaults to /home/sage/notebooks/state_{graph}_r{r}_partitions{partitions}_off{partition}.txt")
     ap.add_argument("--stop_file", type=str, default="",
                     help="During --scan_all_J: if this file exists, exit before starting next case. On SAT, write it.")
 
@@ -877,12 +877,12 @@ def main():
     if args.scan_all_J:
         rows = list(range(dim))
 
-        stride = int(args.stride)
-        offset = int(args.offset)
-        if stride < 1:
-            raise ValueError("--stride must be >= 1")
-        if offset < 0 or offset >= stride:
-            raise ValueError("--offset must satisfy 0 <= offset < stride")
+        partitions = int(args.partitions)
+        partition = int(args.partition)
+        if partitions < 1:
+            raise ValueError("--partitions must be >= 1")
+        if partition < 0 or partition >= partitions:
+            raise ValueError("--partition must satisfy 0 <= partition < partitions")
 
         stop_file = str(args.stop_file) if args.stop_file else ""
 
@@ -890,18 +890,18 @@ def main():
             state_file = str(args.state_file)
         else:
             gname = _sanitize_for_filename(str(args.graph))
-            state_file = f"/home/sage/notebooks/state_{gname}_r{r}_stride{stride}_off{offset}.txt"
+            state_file = f"/home/sage/notebooks/state_{gname}_r{r}_partitions{partitions}_off{partition}.txt"
 
         last_done = None
         resume_local = 0
         if args.resume and state_file:
             last_done = _read_int_file(state_file)
             if last_done is not None:
-                if last_done < offset or ((last_done - offset) % stride) != 0:
-                    print(f"Warning: ignoring state_file={state_file} (last_done={last_done} not compatible with off={offset}, stride={stride})")
+                if last_done < partition or ((last_done - partition) % partitions) != 0:
+                    print(f"Warning: ignoring state_file={state_file} (last_done={last_done} not compatible with off={partition}, partitions={partitions})")
                     last_done = None
                 else:
-                    resume_local = (last_done - offset) // stride + 1
+                    resume_local = (last_done - partition) // partitions + 1
                     print(f"Resuming: state_file={state_file} last_done_gidx={last_done} -> start_local={resume_local}")
                     sys.stdout.flush()
 
@@ -910,21 +910,21 @@ def main():
         local = resume_local
         for Jset in Subsets(rows, kdim):
             if stop_file and os.path.exists(stop_file):
-                print(f"Stop file exists ({stop_file}); exiting off={offset} stride={stride}.")
+                print(f"Stop file exists ({stop_file}); exiting off={partition} partitions={partitions}.")
                 sys.stdout.flush()
                 return
 
             if last_done is not None and gidx <= last_done:
                 gidx += 1
                 continue
-            if (gidx - offset) % stride != 0:
+            if (gidx - partition) % partitions != 0:
                 gidx += 1
                 continue
             J = list(Jset)
 
             # progress banner at start of each case
             ts0 = datetime.now().isoformat(timespec="seconds")
-            label = f"gidx={gidx} local={local} off={offset} stride={stride} J={J}"
+            label = f"gidx={gidx} local={local} off={partition} partitions={partitions} J={J}"
             print(f"[{ts0}] START {label}")
             sys.stdout.flush()
 
@@ -955,14 +955,14 @@ def main():
                     sys.stdout.flush()
 
             if sat:
-                print("SAT found for J =", J, "(gidx", gidx, ", local", local, ", off", offset, ", stride", stride, ")")
+                print("SAT found for J =", J, "(gidx", gidx, ", local", local, ", off", partition, ", partitions", partitions, ")")
                 sys.stdout.flush()
 
                 # Signal other workers to stop (if configured).
                 if stop_file:
                     try:
                         with open(stop_file, "w") as f:
-                            f.write(f"SAT gidx={gidx} off={offset} stride={stride} J={J}\n")
+                            f.write(f"SAT gidx={gidx} off={partition} partitions={partitions} J={J}\n")
                     except Exception as e:
                         print("Warning: could not write stop_file:", stop_file, "err:", repr(e))
                     sys.stdout.flush()
@@ -1002,7 +1002,7 @@ def main():
             gidx += 1
 
 
-        print(f"No SAT case found for off={offset} stride={stride} (processed {local} cases).")
+        print(f"No SAT case found for off={partition} partitions={partitions} (processed {local} cases).")
         return
 
     print("No J specified. Use --J ... or --scan_all_J.")

@@ -1,9 +1,0 @@
-[Unit]
-Description=SageQueue: requeue orphaned running jobs
-
-[Service]
-Type=oneshot
-EnvironmentFile=%h/.config/sagequeue/sagequeue.env
-Environment=PATH=/usr/bin:/bin
-ExecStart=/bin/bash -c 'set -euo pipefail; exec "$PROJECT_ROOT/bin/sagequeue-recover.sh"'
-

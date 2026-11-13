@@ -122,5 +122,31 @@ class QueueTests(unittest.TestCase):
         jid=self.submit('pass\n');self.finish(self.worker())
         with self.assertRaises(ValueError):self.q.retry(jid)
 
+    def test_array_range_and_task_environment(self):
+        jid=self.submit('import os; print(os.environ["SAGEQUEUE_PARTITION"],os.environ["SAGEQUEUE_PARTITIONS"])\n',options=('--array','0-7:2'))
+        self.assertEqual(self.q.expand(jid),['1.0','1.2','1.4','1.6'])
+        for _ in range(4):self.finish(self.worker())
+        self.assertTrue(all(j['state']=='done' for j in self.q.jobs()))
+        log=self.q.path('1.4').parent/'attempt-0001/stdout.log'
+        self.assertEqual(log.read_text().strip(),'4 8')
+
+    def test_cancel_array_and_retry_only_failed_tasks(self):
+        jid=self.submit('pass\n',options=('--partitions','3'))
+        self.finish(self.worker())
+        with contextlib.redirect_stdout(io.StringIO()):self.q.cancel(jid)
+        self.assertEqual([j['state'] for j in self.q.jobs()],['done','cancelled','cancelled'])
+        with patch.object(self.q,'start'),contextlib.redirect_stdout(io.StringIO()):self.q.retry(jid)
+        self.assertEqual([j['state'] for j in self.q.jobs()],['done','queued','queued'])
+
+    def test_array_selection_rejects_duplicates_and_invalid_steps(self):
+        self.assertEqual(sq.array_selection('2-8:3,12'),([2,5,8,12],13))
+        for value in ('3-1','0-8:0','1,1','0-1000000','abc'):
+            with self.subTest(value=value),self.assertRaises(ValueError):sq.array_selection(value)
+
+    def test_noun_commands(self):
+        jid=self.submit('pass\n',options=('--partitions','2'))
+        for command in (['tasks'],['tasks','status'],['partitions',str(jid)],['workers']):
+            with contextlib.redirect_stdout(io.StringIO()):self.assertEqual(sq.main(self.base+command),0)
+
 
 if __name__=='__main__':unittest.main()

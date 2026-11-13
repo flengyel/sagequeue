@@ -37,7 +37,7 @@ def limit():
     if hasattr(os, 'sched_getaffinity'):
         available = sorted(os.sched_getaffinity(0))
         os.sched_setaffinity(0, available[:p['cpus']])
-env = dict(os.environ)
+env = dict(os.environ, **p['environment'])
 for k in ('OMP_NUM_THREADS','OPENBLAS_NUM_THREADS','MKL_NUM_THREADS'):
     env[k] = str(p['cpus'])
 atomic('runtime.json', {'pid':os.getpid(), 'token':p['token']})
@@ -134,6 +134,7 @@ class Queue:
         self.root = (args.root or self.notebooks/'sagequeue-runs').expanduser().resolve()
         self.root.mkdir(parents=True, exist_ok=True)
         (self.root/'jobs').mkdir(exist_ok=True)
+        (self.root/'arrays').mkdir(exist_ok=True)
         self.to_container(self.root)
 
     def to_container(self, path):
@@ -150,9 +151,20 @@ class Queue:
             yield
 
     def path(self, jobid):
-        if not str(jobid).isdigit() or int(jobid) < 1:
-            raise ValueError('A job ID must be a positive integer.')
-        return self.root/'jobs'/f'{int(jobid):06d}'/'job.json'
+        match = re.fullmatch(r'([1-9]\d*)(?:\.(\d+))?',str(jobid))
+        if not match:
+            raise ValueError('Use a job ID or an array task ID such as 12.3.')
+        base = f'{int(match[1]):06d}'
+        if match[2] is not None:
+            return self.root/'arrays'/base/'tasks'/f'{int(match[2]):06d}'/'job.json'
+        return self.root/'jobs'/base/'job.json'
+
+    def expand(self, jobid):
+        if str(jobid).isdigit():
+            path = self.root/'arrays'/f'{int(jobid):06d}'/'array.json'
+            if path.exists():
+                return json.loads(path.read_text())['tasks']
+        return [jobid]
 
     def read(self, jobid):
         path = self.path(jobid)
@@ -161,7 +173,9 @@ class Queue:
         return json.loads(path.read_text())
 
     def jobs(self):
-        return [json.loads(p.read_text()) for p in sorted((self.root/'jobs').glob('*/job.json'))]
+        paths = list((self.root/'jobs').glob('*/job.json'))
+        paths += list((self.root/'arrays').glob('[0-9]*/tasks/*/job.json'))
+        return sorted((json.loads(p.read_text()) for p in paths),key=lambda j:(j['job_id'],j['partition']))
 
     def save(self, job):
         job['updated'] = stamp()
@@ -222,19 +236,47 @@ class Queue:
                 value = self.to_container(value)
             forwarded.append(prefix+sep+value)
         argv = [self.args.sage_bin]+(['-python'] if script.suffix == '.py' else [])+[remote]+forwarded
+        if args.partitions is not None:
+            if not 1 <= args.partitions <= 100000:
+                raise ValueError('Use between 1 and 100000 partitions.')
+            selected = list(range(args.partitions)); partition_count = args.partitions
+        elif args.array:
+            selected, partition_count = array_selection(args.array)
+        else:
+            selected, partition_count = [0], 1
+        is_array = args.array is not None or args.partitions is not None
         with self.locked():
             counter = self.root/'next-id.json'
             jobid = json.loads(counter.read_text()) if counter.exists() else 1
             atomic(counter, jobid+1)
-            job = {'id':jobid,'name':args.name or script.stem,'state':'queued','submitted':stamp(),
-                   'container':self.args.container,'sage_bin':self.args.sage_bin,
-                   'argv':argv,'cwd':self.to_container(cwd),'cpus':args.cpus,
-                   'memory_mib':args.memory,'seconds':args.time,'attempt':0,
-                   'script':str(script),'script_sha256':hashlib.sha256(script.read_bytes()).hexdigest()}
-            self.save(job)
+            task_ids = []
+            staging = self.root/'arrays'/('.staging-'+str(jobid)+'-'+uuid.uuid4().hex)
+            for partition in selected:
+                task_id = str(jobid)+'.'+str(partition) if is_array else jobid
+                job = {'id':task_id,'job_id':jobid,'partition':partition,
+                       'partitions':partition_count,'task_count':len(selected),
+                       'name':args.name or script.stem,'state':'queued','submitted':stamp(),
+                       'container':self.args.container,'sage_bin':self.args.sage_bin,
+                       'argv':argv,'cwd':self.to_container(cwd),'cpus':args.cpus,
+                       'memory_mib':args.memory,'seconds':args.time,'attempt':0,
+                       'script':str(script),'script_sha256':hashlib.sha256(script.read_bytes()).hexdigest(),
+                       'environment':{'SAGEQUEUE_JOB_ID':str(jobid),
+                                      'SAGEQUEUE_TASK_ID':str(partition),
+                                      'SAGEQUEUE_TASK_COUNT':str(len(selected)),
+                                      'SAGEQUEUE_PARTITION':str(partition),
+                                      'SAGEQUEUE_PARTITIONS':str(partition_count)}}
+                if is_array:
+                    job['updated'] = stamp()
+                    atomic(staging/'tasks'/f'{partition:06d}'/'job.json',job)
+                else:
+                    self.save(job)
+                task_ids.append(task_id)
+            if is_array:
+                atomic(staging/'array.json',{'id':jobid,'tasks':task_ids,'partitions':partition_count})
+                staging.rename(self.root/'arrays'/f'{jobid:06d}')
+        print(f"Job {jobid} queued ({args.name or script.stem}; {len(selected)} task(s)).")
         if not args.hold:
             self.start()
-        print(f"Job {jobid} queued ({job['name']}).")
         return jobid
 
     def claim(self):
@@ -267,7 +309,7 @@ class Queue:
         directory = self.path(job['id']).parent
         attempt = directory/f"attempt-{job['attempt']:04d}"
         attempt.mkdir(exist_ok=True)
-        payload = {k:job[k] for k in ('argv','cwd','cpus','memory_mib','seconds','token')}
+        payload = {k:job[k] for k in ('argv','cwd','cpus','memory_mib','seconds','token','environment')}
         payload.update(attempt_dir=self.to_container(attempt),cancel_file=self.to_container(directory/'cancel'))
         process = None
         if not adopted:
@@ -312,6 +354,7 @@ class Queue:
             def stop(signum, frame):
                 nonlocal stopping
                 stopping = True
+            atomic(self.root/f'worker-{args.slot}.json',identity())
             signal.signal(signal.SIGTERM,stop)
             signal.signal(signal.SIGINT,stop)
             while not stopping and not (self.root/'workers.stop').exists():
@@ -329,39 +372,50 @@ class Queue:
 
     def cancel(self, jobid):
         with self.locked():
-            job = self.reconcile(self.read(jobid))
-            if job['state'] == 'queued':
-                job.update(state='cancelled',finished=stamp())
-            elif job['state'] == 'running':
-                (self.path(jobid).parent/'cancel').touch()
-                job['cancel_requested'] = stamp()
-            self.save(job)
-        print(f"Job {jobid}: {job['state']}"+(' (cancellation requested)' if job['state']=='running' else ''))
+            for task in self.expand(jobid):
+                job = self.reconcile(self.read(task))
+                if job['state'] == 'queued':
+                    job.update(state='cancelled',finished=stamp())
+                elif job['state'] == 'running':
+                    (self.path(task).parent/'cancel').touch()
+                    job['cancel_requested'] = stamp()
+                self.save(job)
+                print(f"Task {task}: {job['state']}"+(' (cancellation requested)' if job['state']=='running' else ''))
 
     def retry(self, jobid):
+        count = 0
         with self.locked():
-            job = self.reconcile(self.read(jobid))
-            if job['state'] not in TERMINAL-{'done'}:
-                raise ValueError('Retry requires a failed, cancelled, or timed-out job.')
-            (self.path(jobid).parent/'cancel').unlink(missing_ok=True)
-            for key in ('error','returncode','finished','wall_seconds','cancel_requested'):
-                job.pop(key,None)
-            job.update(state='queued',submitted=stamp())
-            self.save(job)
+            targets = self.expand(jobid)
+            for task in targets:
+                job = self.reconcile(self.read(task))
+                if job['state'] not in TERMINAL-{'done'}:
+                    continue
+                (self.path(task).parent/'cancel').unlink(missing_ok=True)
+                for key in ('error','returncode','finished','wall_seconds','cancel_requested'):
+                    job.pop(key,None)
+                job.update(state='queued',submitted=stamp())
+                self.save(job);count += 1
+        if not count:
+            raise ValueError('Retry requires a failed, cancelled, or timed-out task.')
         self.start()
-        print(f'Job {jobid} queued for retry; earlier attempt logs are retained.')
+        print(f'{count} task(s) queued for retry; earlier attempt logs are retained.')
 
     def status(self, args):
         with self.locked():
-            jobs = [self.reconcile(self.read(x)) for x in args.ids] if args.ids else [self.reconcile(j) for j in self.jobs()]
+            ids = [t for x in args.ids for t in self.expand(x)]
+            jobs = [self.reconcile(self.read(x)) for x in ids] if args.ids else [self.reconcile(j) for j in self.jobs()]
         if args.json:
             print(json.dumps(jobs,indent=2)); return
-        print(f"{'ID':>6}  {'STATE':<10}  {'CPUS':>4}  {'MEM MiB':>7}  NAME")
+        print(f"{'TASK':>10}  {'PARTITION':>9}  {'STATE':<10}  {'CPUS':>4}  {'MEM MiB':>7}  NAME")
         for job in jobs:
             state = 'cancelling' if job.get('cancel_requested') and job['state']=='running' else job['state']
-            print(f"{job['id']:6}  {state:<10}  {job['cpus']:4}  {job['memory_mib']:7}  {job['name']}")
+            print(f"{str(job['id']):>10}  {job['partition']:9}  {state:<10}  {job['cpus']:4}  {job['memory_mib']:7}  {job['name']}")
 
     def logs(self, args):
+        tasks = self.expand(args.id)
+        if len(tasks) != 1:
+            raise ValueError('Select one task for logs, for example '+str(tasks[0])+'.')
+        args.id = tasks[0]
         position = 0
         while True:
             job = self.read(args.id)
@@ -378,29 +432,63 @@ class Queue:
             time.sleep(0.25)
 
 
+def array_selection(text):
+    selected=[];count=0
+    for group in text.split(','):
+        m=re.fullmatch(r'(\d+)(?:-(\d+)(?::(\d+))?)?',group)
+        if not m:
+            raise ValueError('Use an array such as 0-7, 0-31:2, or 1,4,9.')
+        first=int(m[1]);last=int(m[2]) if m[2] is not None else first
+        step=int(m[3]) if m[3] is not None else 1
+        if first>last or step<1:
+            raise ValueError('Array ranges must increase and have a positive step.')
+        values=range(first,last+1,step)
+        if len(selected)+len(values)>100000:
+            raise ValueError('An array may contain at most 100000 tasks.')
+        selected.extend(values);count=max(count,last+1)
+    if len(selected)!=len(set(selected)):
+        raise ValueError('Array task IDs must be distinct.')
+    return sorted(selected),count
+
+
+def task_parsers(sub):
+    s=sub.add_parser('submit',help='Queue a Sage or Python script.')
+    s.add_argument('-J','--name');s.add_argument('--cwd')
+    s.add_argument('-n','--cpus',type=int,default=1)
+    s.add_argument('-M','--memory',type=memory,default=2048)
+    s.add_argument('-W','--time',type=duration,default=3600)
+    a=s.add_mutually_exclusive_group()
+    a.add_argument('--array',help='Task IDs, e.g. 0-7 or 0-31:2.')
+    a.add_argument('--partitions',type=int,help='Submit every partition, numbered from zero.')
+    s.add_argument('--hold',action='store_true',help='Queue without starting workers.')
+    s.add_argument('script');s.add_argument('arguments',nargs=argparse.REMAINDER)
+    s=sub.add_parser('status',aliases=['jobs'],help='List tasks and their states.')
+    s.add_argument('ids',nargs='*');s.add_argument('--json',action='store_true')
+    s=sub.add_parser('logs',help='Read a task output log.')
+    s.add_argument('id');s.add_argument('-f','--follow',action='store_true');s.add_argument('--stderr',action='store_true')
+    for action in ('cancel','retry'):
+        s=sub.add_parser(action);s.add_argument('id')
+
+
 def parser():
-    p = argparse.ArgumentParser(description=__doc__)
+    p=argparse.ArgumentParser(description=__doc__)
     p.add_argument('--root',type=Path,default=os.environ.get('SAGEQUEUE_ROOT'))
     p.add_argument('--notebooks',type=Path,default=Path.home()/'Jupyter')
     p.add_argument('--container-notebooks',default='/home/sage/notebooks')
     p.add_argument('--container',default=os.environ.get('SAGEPOD_CONTAINER','sagepod'))
     p.add_argument('--sage-bin',default='/sage/sage')
-    sub = p.add_subparsers(dest='action',required=True)
-    s = sub.add_parser('submit',help='Queue a Sage or Python script.')
-    s.add_argument('-J','--name');s.add_argument('--cwd')
-    s.add_argument('-n','--cpus',type=int,default=1)
-    s.add_argument('-M','--memory',type=memory,default=2048)
-    s.add_argument('-W','--time',type=duration,default=3600)
-    s.add_argument('--hold',action='store_true',help='Queue without starting workers.')
-    s.add_argument('script');s.add_argument('arguments',nargs=argparse.REMAINDER)
-    s = sub.add_parser('status',aliases=['jobs'],help='List jobs and their states.')
-    s.add_argument('ids',nargs='*');s.add_argument('--json',action='store_true')
-    s = sub.add_parser('logs',help='Read a job output log.')
-    s.add_argument('id');s.add_argument('-f','--follow',action='store_true');s.add_argument('--stderr',action='store_true')
-    for action in ('cancel','retry'):
-        s=sub.add_parser(action);s.add_argument('id')
+    sub=p.add_subparsers(dest='action',required=True)
+    tasks=sub.add_parser('tasks',help='Submit, list, and control tasks.')
+    task_parsers(tasks.add_subparsers(dest='task_action'))
+    task_parsers(sub)
+    parts=sub.add_parser('partitions',help='Inspect partitions and their tasks.')
+    parts.add_argument('ids',nargs='*');parts.add_argument('--json',action='store_true')
+    workers=sub.add_parser('workers',help='Inspect or change worker concurrency.')
+    ws=workers.add_subparsers(dest='worker_action')
+    start=ws.add_parser('start');start.add_argument('-j','--workers',type=int,default=1)
+    ws.add_parser('stop');ws.add_parser('status')
     s=sub.add_parser('start',help='Start background workers.');s.add_argument('-j','--workers',type=int,default=1)
-    sub.add_parser('stop',help='Stop workers after their current jobs.')
+    sub.add_parser('stop',help='Stop workers after their current tasks.')
     s=sub.add_parser('worker',help='Run a foreground worker, suitable for systemd.')
     s.add_argument('--slot',type=int,default=0);s.add_argument('--once',action='store_true')
     sub.add_parser('doctor',help='Check the SagePod connection and Sage/SAT versions.')
@@ -409,17 +497,33 @@ def parser():
 
 def main(argv=None):
     args=parser().parse_args(argv)
+    action=args.action
+    if action=='tasks':
+        action=args.task_action or 'status'
+        if args.task_action is None:args.ids=[];args.json=False
+    elif action=='partitions':action='status'
+    elif action=='workers':action=args.worker_action or 'worker-status'
+    if args.action=='workers' and action=='status':action='worker-status'
     try:
         q=Queue(args)
-        if args.action=='submit':q.submit(args)
-        elif args.action in ('status','jobs'):q.status(args)
-        elif args.action=='logs':q.logs(args)
-        elif args.action=='cancel':q.cancel(args.id)
-        elif args.action=='retry':q.retry(args.id)
-        elif args.action=='start':q.start(args.workers)
-        elif args.action=='stop':(q.root/'workers.stop').touch();print('Workers will stop after their current jobs.')
-        elif args.action=='worker':q.worker(args)
-        elif args.action=='doctor':
+        if action=='submit':q.submit(args)
+        elif action in ('status','jobs'):q.status(args)
+        elif action=='logs':q.logs(args)
+        elif action=='cancel':q.cancel(args.id)
+        elif action=='retry':q.retry(args.id)
+        elif action=='start':q.start(args.workers)
+        elif action=='stop':(q.root/'workers.stop').touch();print('Workers will stop after their current tasks.')
+        elif action=='worker':q.worker(args)
+        elif action=='worker-status':
+            print('WORKER  STATE    PID')
+            for path in sorted(q.root.glob('worker-*.lock')):
+                with path.open('a+') as f:
+                    try:fcntl.flock(f,fcntl.LOCK_EX|fcntl.LOCK_NB);held=False
+                    except BlockingIOError:held=True
+                meta=path.with_suffix('.json')
+                data=json.loads(meta.read_text()) if meta.exists() else {}
+                print(path.stem.removeprefix('worker-'), 'running' if held else 'stopped',data.get('pid','-'))
+        elif action=='doctor':
             q.probe()
             code='from sage.env import SAGE_VERSION; import pycryptosat; print("Sage",SAGE_VERSION,"CryptoMiniSat",pycryptosat.__version__)'
             return subprocess.call(['podman','exec',args.container,args.sage_bin,'-python','-c',code])

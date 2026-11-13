@@ -36,10 +36,11 @@ sagequeue doctor
 
 Submitted jobs now use `sagepod`. Queue state for the current interface is
 under `~/Jupyter/sagequeue-runs`. Existing `var/<jobset>` records remain in
-place. For partitioned experiments, the Makefile jobset interface can use
-SagePod; its current setup is described in the main README. Check the
-experiment's checkpoint options before resubmitting an offset through a
-different interface.
+place. Submit partitioned experiments through `tasks submit --partitions N`.
+The included experiment scripts read partition IDs from the task environment.
+For an existing experiment checkpoint, pass its explicit `--state_file`
+path rather than relying on a generated default filename. Check the saved
+partition assignment before resuming.
 
 ## Remove an unused container
 
