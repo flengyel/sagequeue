@@ -132,10 +132,12 @@ class Queue:
         self.args = args
         self.notebooks = args.notebooks.expanduser().resolve()
         self.root = (args.root or self.notebooks/'sagequeue-runs').expanduser().resolve()
+        self.to_container(self.root)
         self.root.mkdir(parents=True, exist_ok=True)
         (self.root/'jobs').mkdir(exist_ok=True)
         (self.root/'arrays').mkdir(exist_ok=True)
-        self.to_container(self.root)
+        self.container_uid = None
+        self.queue_shared = False
 
     def to_container(self, path):
         path = Path(path).expanduser().resolve()
@@ -199,7 +201,35 @@ class Queue:
         if result.returncode or result.stdout.strip() != 'true':
             raise ValueError(f'SagePod container {self.args.container!r} is not running. Start SagePod first.')
 
+    def share(self,workdir=None,script=None,tree=None,force=False):
+        if self.container_uid is None:
+            result=subprocess.run(['podman','container','inspect','--format','{{.Config.User}}',
+                                   self.args.container],capture_output=True,text=True,timeout=15)
+            user=result.stdout.strip().split(':',1)[0]
+            if result.returncode:
+                raise ValueError('Cannot inspect the SagePod user: '+result.stderr.strip())
+            if not user.isdigit():
+                result=subprocess.run(['podman','exec',self.args.container,'id','-u'],
+                                      capture_output=True,text=True,timeout=15)
+                user=result.stdout.strip()
+                if result.returncode or not user.isdigit():
+                    raise ValueError('Cannot determine SagePod\'s numeric user ID.')
+            self.container_uid=int(user)
+        if self.queue_shared and workdir is None and script is None and tree is None and not force:
+            return
+        command=['podman','unshare',sys.executable,str(Path(__file__).with_name('queue_acl.py')),
+                 '--boundary',str(self.notebooks),'--queue',str(self.root),'--uid',str(self.container_uid)]
+        for flag,value in (('--workdir',workdir),('--script',script),('--tree',tree)):
+            if value is not None:command.extend((flag,str(value)))
+        if force:command.append('--force')
+        result=subprocess.run(command,capture_output=True,text=True,timeout=120)
+        if result.returncode:
+            raise ValueError('Cannot prepare SageQueue shared permissions: '+
+                             (result.stderr.strip() or result.stdout.strip()))
+        self.queue_shared=True
+
     def probe_access(self):
+        self.share()
         code = ('import sys,tempfile\n'
                 'with tempfile.TemporaryFile(dir=sys.argv[1]) as f:\n'
                 '    f.write(b"sagequeue mount check"); f.flush()\n')
@@ -258,6 +288,7 @@ class Queue:
         else:
             selected, partition_count = [0], 1
         is_array = args.array is not None or args.partitions is not None
+        self.share(workdir=cwd,script=script)
         with self.locked():
             counter = self.root/'next-id.json'
             jobid = json.loads(counter.read_text()) if counter.exists() else 1
@@ -322,6 +353,16 @@ class Queue:
         directory = self.path(job['id']).parent
         attempt = directory/f"attempt-{job['attempt']:04d}"
         attempt.mkdir(exist_ok=True)
+        if not adopted:
+            try:
+                self.share(workdir=self.notebooks/Path(job['cwd']).relative_to(self.args.container_notebooks),
+                           script=Path(job['script']),tree=attempt)
+            except (ValueError,OSError,subprocess.SubprocessError) as error:
+                with self.locked():
+                    current=self.read(job['id'])
+                    current.update(state='failed',error=str(error),finished=stamp())
+                    self.save(current)
+                return
         payload = {k:job[k] for k in ('argv','cwd','cpus','memory_mib','seconds','token','environment')}
         payload.update(attempt_dir=self.to_container(attempt),cancel_file=self.to_container(directory/'cancel'))
         process = None
@@ -397,6 +438,7 @@ class Queue:
                 print(f"Task {task}: {job['state']}"+(' (cancellation requested)' if job['state']=='running' else ''))
 
     def retry(self, jobid):
+        self.share()
         count = 0
         with self.locked():
             targets = self.expand(jobid)
@@ -554,6 +596,7 @@ def main(argv=None):
                 print(path.stem.removeprefix('worker-'), 'running' if held else 'stopped',data.get('pid','-'))
         elif action=='doctor':
             q.probe()
+            q.share(force=True)
             q.probe_access()
             code='from sage.env import SAGE_VERSION; import pycryptosat; print("Sage",SAGE_VERSION,"CryptoMiniSat",pycryptosat.__version__)'
             return subprocess.call(['podman','exec',args.container,args.sage_bin,'-python','-c',code])

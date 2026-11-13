@@ -17,9 +17,11 @@ bin/setup.sh
 sagequeue doctor
 ```
 
-SageQueue needs Python 3.10 or newer and rootless Podman on Linux or WSL2.
-It uses Python's standard library and SagePod's existing runtime. Setup
-installs `~/.local/bin/sagequeue` and checks the SagePod connection.
+SageQueue needs Python 3.10 or newer, rootless Podman, and the host `acl`
+package on Linux or WSL2. It uses Python's standard library and SagePod's
+existing runtime. Setup
+installs `~/.local/bin/sagequeue`, prepares shared queue ACLs, and checks
+the SagePod connection.
 
 ## Tasks, partitions, and workers
 
@@ -71,7 +73,7 @@ environment variables. See [commands](docs/commands.md).
 | `sagequeue workers [status]` | Inspect worker slots. |
 | `sagequeue workers start --workers N` | Start worker slots. |
 | `sagequeue workers stop` | Stop workers after their current tasks. |
-| `sagequeue doctor` | Check SagePod, queue-directory access, and solver versions. |
+| `sagequeue doctor` | Prepare shared queue ACLs and check SagePod and solver versions. |
 
 ## Resource controls and recovery
 
@@ -79,6 +81,11 @@ The defaults are one worker, one CPU per task, a 2048 MiB address-space
 limit per process, and a one-hour wall limit. Workers do not reserve total
 host memory; choose concurrency to fit the machine and notebook workload.
 The [command reference](docs/commands.md) states the resource limits.
+
+SageQueue sets access and default ACLs for the host account and SagePod
+user automatically. The queue and declared task paths receive the required
+access; other notebook contents are not recursively changed. See
+[shared-directory access](docs/commands.md#shared-directory-access).
 
 Jobs and attempt logs are saved under `~/Jupyter/sagequeue-runs`.
 Retries retain earlier logs. Atomic claims prevent duplicate execution.
@@ -98,10 +105,11 @@ python3 -m unittest discover -s tests -v
 sagequeue doctor
 ```
 
-Automated tests use a process-level Podman substitute for task submission,
-arrays, cancellation, timeouts, concurrent claims, retries, and worker
-recovery. The `doctor` command checks the installed SagePod runtime and write access
-to the queue directory. Launcher diagnostics are available with
-`tasks logs ID --launch`.
+Automated tests cover submission, arrays, cancellation, timeouts, concurrent
+claims, retries, worker recovery, and ACL scope and inheritance. Queue
+process tests use a Podman substitute; native ACL tests run when the local
+filesystem and user mapping support them. The [live smoke test](docs/smoke-test.md)
+checks SagePod execution and automatic repair of a fresh private directory.
+Launcher diagnostics are available with `tasks logs ID --launch`.
 
 [Migration guide](docs/migration.md) · [License](LICENSE)

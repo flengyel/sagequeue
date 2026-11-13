@@ -28,9 +28,9 @@ class QueueTests(unittest.TestCase):
         self.sage.write_text('#!'+sys.executable+'\nimport os,sys\na=sys.argv[1:]\nif a[:1]==["-python"]:a=a[1:]\nos.execv(sys.executable,[sys.executable]+a)\n')
         self.sage.chmod(0o755)
         podman=self.bin/'podman'
-        podman.write_text('#!'+sys.executable+'\nimport os,sys\na=sys.argv[1:]\nif a[:2]==["container","inspect"]:print("true");sys.exit(0)\nif a[0]=="exec":os.execvp(a[2],a[2:])\nraise SystemExit(2)\n')
+        podman.write_text('#!'+sys.executable+'\nimport os,sys,json\na=sys.argv[1:]\nif a[:2]==["container","inspect"]:print(str(os.geteuid())+":"+str(os.getegid()) if "Config.User" in a[3] else "true");sys.exit(0)\nif a[0]=="unshare":\n with open(os.environ["FAKE_PODMAN_ACL_LOG"],"a") as f:f.write(json.dumps(a[1:])+"\\n")\n sys.exit(0)\nif a[0]=="exec":os.execvp(a[2],a[2:])\nraise SystemExit(2)\n')
         podman.chmod(0o755)
-        self.env=patch.dict(os.environ,{'PATH':str(self.bin)+os.pathsep+os.environ['PATH']})
+        self.env=patch.dict(os.environ,{'PATH':str(self.bin)+os.pathsep+os.environ['PATH'],'FAKE_PODMAN_ACL_LOG':str(self.root/'acl-calls.jsonl')})
         self.env.start();self.addCleanup(self.env.stop)
         self.base=['--notebooks',str(self.notebooks),'--container-notebooks',str(self.notebooks),
                    '--sage-bin',str(self.sage)]
@@ -148,9 +148,33 @@ class QueueTests(unittest.TestCase):
         for command in (['tasks'],['tasks','status'],['partitions',str(jid)],['workers']):
             with contextlib.redirect_stdout(io.StringIO()):self.assertEqual(sq.main(self.base+command),0)
 
+    def test_submit_and_attempt_request_scoped_acl_preparation(self):
+        jid=self.submit('pass\n')
+        calls=[json.loads(line) for line in (self.root/'acl-calls.jsonl').read_text().splitlines()]
+        self.assertTrue(any('--workdir' in c and '--script' in c for c in calls))
+        self.finish(self.worker())
+        calls=[json.loads(line) for line in (self.root/'acl-calls.jsonl').read_text().splitlines()]
+        attempt=self.q.path(jid).parent/'attempt-0001'
+        self.assertTrue(any('--tree' in c and c[c.index('--tree')+1]==str(attempt) for c in calls))
+
+    def test_container_uid_is_discovered_from_configuration(self):
+        def command(args,**kwargs):
+            return subprocess.CompletedProcess(args,0,stdout='2345:2345\n' if 'inspect' in args else '',stderr='')
+        with patch.object(sq.subprocess,'run',side_effect=command) as run:
+            self.q.share()
+        self.assertEqual(self.q.container_uid,2345)
+        args=run.call_args.args[0]
+        self.assertEqual(args[args.index('--uid')+1],'2345')
+
+    def test_outside_queue_is_rejected_without_creating_directory(self):
+        outside=self.root/'outside-queue'
+        args=sq.parser().parse_args(self.base+['--root',str(outside),'tasks'])
+        with self.assertRaises(ValueError):sq.Queue(args)
+        self.assertFalse(outside.exists())
+
     def test_unwritable_mount_is_rejected_before_worker_start(self):
         result=subprocess.CompletedProcess([],1,stdout='',stderr='PermissionError: queue parent is private')
-        with patch.object(sq.subprocess,'run',return_value=result):
+        with patch.object(self.q,'share'),patch.object(sq.subprocess,'run',return_value=result):
             with self.assertRaisesRegex(ValueError,'cannot write the queue directory'):
                 self.q.probe_access()
         self.assertFalse((self.q.root/'worker-0.json').exists())

@@ -117,13 +117,34 @@ existing mount or Sage executable. SageQueue does not alter SagePod.
 
 ## Shared-directory access
 
-SagePod's mapped user must be able to traverse the queue's parent directories
-and write the queue directory. Worker startup and `doctor` check this access
-inside SagePod before tasks are claimed. The queue does not change ownership
-or permissions automatically.
+SageQueue prepares ACLs automatically during submission, worker startup,
+and `doctor`. It reads SagePod's configured numeric user ID and runs its
+ACL helper in Podman's rootless user namespace. The host account and the
+SagePod user receive the access needed for queue records and task files.
+The host `acl` package supplies `setfacl` and `getfacl`.
 
-Create test directories with `mkdir` under the configured notebook mount so
-that its shared default permissions can be inherited. A private directory
-created by `mktemp -d` normally has mode 0700 and may block the container user.
-When startup fails, inspect the path and permission error reported by
-`doctor`; task launch diagnostics are available with `tasks logs ID --launch`.
+The repair covers:
+
+- Read/write access to queue records and attempt logs, with traversal of
+  queue directories.
+- Default ACLs on queue directories, so new records and directories inherit
+  shared access.
+- Access and default ACLs on the task's declared working directory, plus
+  read access to its script.
+- Traversal of the necessary ancestors within the notebook mount.
+
+The queue tree is repaired on first use. Its permission record avoids a
+full history scan on each submission; every new attempt is prepared before
+launch. `doctor` also repairs existing queue files. This handles private
+test directories created with `mktemp -d`.
+
+Ownership and file contents are preserved. Existing effective permissions
+for other principals are preserved when the ACL mask is enlarged. The
+helper skips queue-tree symlinks and rejects requested paths outside the
+configured notebook mount. It does not recursively change other project
+files or the whole notebook tree. Arbitrary additional input/output paths
+belong to the submitted program's file-access requirements.
+
+If ACL preparation fails, the command reports the path or missing tool.
+Tasks are not launched before shared queue access is checked. Use
+`tasks logs ID --launch` for container-launcher diagnostics.
