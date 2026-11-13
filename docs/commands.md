@@ -96,6 +96,48 @@ concurrency, stop workers, let active tasks finish, then start the desired
 number. Workers survive terminal closure; the host and SagePod must remain
 running. The supplied user-service template provides optional supervision.
 
+Before launching a task, the scheduler assigns distinct logical CPU IDs
+from SagePod's allowed CPU affinity. Assignment and the task claim happen
+under the same queue lock. Concurrent tasks in this queue and container
+receive disjoint sets, including tasks with different `--cpus` requests.
+Tasks wait in `queued` state when too few CPUs are free; a smaller later
+task may use the remaining CPUs. Completion, failure, cancellation, or
+timeout releases the reservation when its completion record is reconciled.
+A request exceeding the container's entire allowed set fails before launch.
+
+The assignment appears as `cpu_ids` in `tasks status ID --json` and the
+attempt's `runtime.json`. Worker replacement retains the running task's
+assignment. Running tasks started by older SageQueue versions keep their
+original first-N-CPU binding; new workers reserve those CPUs without
+restarting the computation. Upgrade existing workers before they launch
+further tasks: `workers stop` lets their current tasks finish before they
+exit, then `workers start` loads the updated scheduler.
+
+CPU reservations are scoped to one queue and container. Other queue roots,
+Jupyter sessions, and external processes can use the same CPUs. The pool
+is discovered from the container when a worker first needs it; restart
+workers after changing the container's allowed CPU set. Linux affinity
+controls eligible logical CPUs, without guaranteeing exclusive hardware
+cores or CPU time.
+
+## Types of parallelism
+
+| Type | How to use it | Program requirements |
+| --- | --- | --- |
+| Concurrent independent tasks | Submit separate tasks with distinct output directories, then start several workers. | Each task runs independently. Workers and available CPUs determine concurrency. |
+| Job-array partitions | Submit `--partitions N` or `--array RANGE`, then start several workers. | The script reads the partition environment variables and divides its own work. Each task needs separate output/checkpoint files. |
+| Threads or child processes within a task | Request `--cpus N`; descendants inherit the assigned CPU set and numerical-library thread settings. | The program or library must implement parallel execution. Requesting CPUs does not create threads or subprocesses. |
+| Several workers cooperating on one search frontier | Requires an application that distributes and combines search work. | SageQueue supplies no shared-frontier or clause-sharing protocol. |
+
+For the involutivity proof program, the current grounder is sequential and
+its CryptoMiniSat backend explicitly uses one solver thread. Extra workers,
+array partitions, or a larger `--cpus` request do not divide that search.
+Independent searches can explore different settings, such as `--order goal`
+and `--order source`, with separate output directories. Their checkpoints
+remain separate; changing rule order requires a fresh output directory.
+Successful certificates are checked independently. More concurrent searches
+increase exploration rather than guaranteeing a proportional speedup.
+
 ## Limits
 
 Defaults are one CPU, 2048 MiB per process, and one hour per task. `--time`
@@ -103,6 +145,9 @@ accepts seconds or suffixes `s`, `m`, `h`, and `d`; `--memory` accepts MiB or
 suffixes `M` and `G`. A task's process group is terminated on cancellation
 or timeout. Child processes inherit a Linux address-space limit and CPU
 affinity. Numerical library thread counts follow the CPU request.
+CPU IDs are chosen by the scheduler; each task receives exactly its
+requested number from the currently unreserved set. A program can still
+choose to use fewer CPUs.
 
 Memory is limited per process, rather than across the whole process tree.
 Workers do not reserve aggregate host RAM. Tasks share SagePod's permissions

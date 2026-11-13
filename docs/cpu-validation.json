@@ -1,0 +1,117 @@
+{
+  "allowed": [
+    0,
+    1,
+    2,
+    3,
+    4,
+    5,
+    6,
+    7,
+    8,
+    9,
+    10,
+    11,
+    12,
+    13,
+    14,
+    15
+  ],
+  "job1_binding": [
+    {
+      "pid": 4090,
+      "cpu_ids": [
+        0
+      ]
+    }
+  ],
+  "simultaneous": [
+    {
+      "job": 9,
+      "pid": 4944,
+      "cpus": [
+        1
+      ],
+      "threads": {
+        "OMP_NUM_THREADS": "1",
+        "OPENBLAS_NUM_THREADS": "1",
+        "MKL_NUM_THREADS": "1"
+      }
+    },
+    {
+      "job": 10,
+      "pid": 5022,
+      "cpus": [
+        2,
+        3
+      ],
+      "threads": {
+        "OMP_NUM_THREADS": "2",
+        "OPENBLAS_NUM_THREADS": "2",
+        "MKL_NUM_THREADS": "2"
+      }
+    }
+  ],
+  "reuse": {
+    "job": 11,
+    "pid": 5188,
+    "cpus": [
+      1
+    ],
+    "threads": {
+      "OMP_NUM_THREADS": "1",
+      "OPENBLAS_NUM_THREADS": "1",
+      "MKL_NUM_THREADS": "1"
+    }
+  },
+  "job1_before": {
+    "status": "running",
+    "round": 0,
+    "phase": "ground",
+    "rule_cursor": 0,
+    "candidate_cursor": 0,
+    "instances": 6664,
+    "theory": 0,
+    "solver_calls": 78,
+    "elapsed_this_run": 3687.027980743005
+  },
+  "job1_after": {
+    "status": "running",
+    "round": 0,
+    "phase": "ground",
+    "rule_cursor": 0,
+    "candidate_cursor": 0,
+    "instances": 6664,
+    "theory": 0,
+    "solver_calls": 78,
+    "elapsed_this_run": 3687.027980743005
+  },
+  "job1_attempt": 3,
+  "original_job_unchanged": true,
+  "probe_directory": "/home/flengyel/Jupyter/cpu-assignment-test-20261113-101039",
+  "updated_worker": {
+    "slot": 1,
+    "pid": 512565
+  },
+  "format": "sagequeue-cpu-validation-v1",
+  "date_utc": "2026-11-13",
+  "host": "LITTLEZ",
+  "baseline_commit": "33cbbd3f1b5ab5e6a63072e5f4595e23f3718207",
+  "scheduler_sha256": "c5d52e0c57550a1ce436c38b92c52c16dc1b10e4e606cefea27e3de3472fd27d",
+  "tests": {
+    "command": "SAGEQUEUE_LIVE_NOTEBOOKS=\"$HOME/Jupyter\" .venv/bin/python -m unittest discover -s tests -v",
+    "count": 50,
+    "skipped": 0,
+    "seconds": 58.581
+  },
+  "checks": [
+    "Concurrent one-CPU tasks and mixed CPU requests have disjoint actual affinities.",
+    "Sparse allowed CPU IDs and capacity waiting are covered by regressions.",
+    "Completion releases CPUs; a later task reuses the freed CPU.",
+    "Oversized requests fail without launch.",
+    "Replacement workers retain assigned CPUs when adopting running tasks.",
+    "Legacy running job 1 retained its original PID, token, attempt, arguments, and CPU 0 binding.",
+    "Thread-count environment settings match each CPU request."
+  ],
+  "scope": "CPU reservations coordinate tasks within one queue and container. Independent queues and other processes can overlap these CPUs. The existing proof engine remains single-threaded; no shared-frontier parallelism was added."
+}

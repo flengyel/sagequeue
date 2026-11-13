@@ -110,9 +110,11 @@ class QueueTests(unittest.TestCase):
         end=time.monotonic()+5
         while not runtime.exists() and time.monotonic()<end:time.sleep(.02)
         self.assertTrue(runtime.exists())
+        cpus=self.q.read(jid)['cpu_ids']
         p.kill();p.communicate(timeout=5)
         self.finish(self.worker())
         job=self.q.read(jid);self.assertEqual((job['state'],job['attempt']),('done',1))
+        self.assertEqual(job['cpu_ids'],cpus)
         self.assertEqual((runtime.parent/'stdout.log').read_text().count('one launch'),1)
 
     def test_two_workers_do_not_duplicate_claims(self):
@@ -122,6 +124,96 @@ class QueueTests(unittest.TestCase):
                             stdout=subprocess.PIPE,stderr=subprocess.PIPE,text=True)
         self.finish(p1);self.finish(p2)
         self.assertEqual([(j['state'],j['attempt']) for j in self.q.jobs()],[('done',1),('done',1)])
+
+    def test_concurrent_tasks_receive_disjoint_cpu_sets(self):
+        if not hasattr(os,'sched_getaffinity') or len(os.sched_getaffinity(0))<3:
+            self.skipTest('Requires three allowed CPUs.')
+        for requests in ((1,1),(2,1)):
+            with self.subTest(requests=requests):
+                gate=self.notebooks/('release-'+str(len(self.q.jobs())))
+                code=('import json,os,time\nfrom pathlib import Path\n'
+                      'record=Path("ready-"+os.environ["SAGEQUEUE_JOB_ID"]+".json")\n'
+                      'record.write_text(json.dumps({"cpus":sorted(os.sched_getaffinity(0)), '
+                      '"threads":os.environ["OMP_NUM_THREADS"]}))\n'
+                      'end=time.monotonic()+10\n'
+                      f'while not Path({str(gate)!r}).exists() and time.monotonic()<end:time.sleep(.02)\n')
+                ids=[self.submit(code,options=('--cpus',str(n))) for n in requests]
+                workers=[subprocess.Popen([sys.executable,str(ROOT/'sagequeue.py'),*self.base,
+                                          'worker','--slot',str(slot),'--once'],
+                                         stdout=subprocess.PIPE,stderr=subprocess.PIPE,text=True)
+                         for slot in (0,1)]
+                try:
+                    paths=[self.notebooks/f'ready-{jid}.json' for jid in ids]
+                    end=time.monotonic()+8
+                    while not all(path.exists() for path in paths) and time.monotonic()<end:time.sleep(.02)
+                    self.assertTrue(all(path.exists() for path in paths),'Tasks did not run concurrently.')
+                    records=[json.loads(path.read_text()) for path in paths]
+                    self.assertTrue(set(records[0]['cpus']).isdisjoint(records[1]['cpus']))
+                    for jid,request,record in zip(ids,requests,records):
+                        self.assertEqual(len(record['cpus']),request)
+                        self.assertEqual(record['threads'],str(request))
+                        self.assertEqual(record['cpus'],self.q.read(jid)['cpu_ids'])
+                        runtime=self.q.path(jid).parent/'attempt-0001/runtime.json'
+                        self.assertEqual(json.loads(runtime.read_text())['cpu_ids'],record['cpus'])
+                    gate.touch()
+                    for worker in workers:self.finish(worker)
+                finally:
+                    gate.touch()
+                    for worker in workers:
+                        if worker.poll() is None:worker.kill();worker.communicate(timeout=5)
+
+    def test_cpu_capacity_waits_then_reuses_completed_assignment(self):
+        first=self.submit('pass\n',options=('--cpus','2'))
+        second=self.submit('pass\n')
+        with patch.object(self.q,'allowed_cpus',return_value=[3,7]):
+            active,_=self.q.claim()
+            self.assertEqual(active['id'],first)
+            self.assertEqual(active['cpu_ids'],[3,7])
+            self.assertEqual(self.q.claim(),(None,False))
+            self.assertEqual(self.q.read(second)['state'],'queued')
+            # Completion releases the reservation even before the old worker exits.
+            directory=self.q.path(first).parent/'attempt-0001';directory.mkdir()
+            sq.atomic(directory/'result.json',{'token':active['token'],'state':'done','returncode':0})
+            next_job,_=self.q.claim()
+            self.assertEqual((next_job['id'],next_job['cpu_ids']),(second,[3]))
+
+    def test_legacy_running_job_keeps_its_cpu_reserved(self):
+        first=self.submit('pass\n');second=self.submit('pass\n')
+        active=self.q.read(first)
+        active.update(state='running',attempt=1,token='legacy',owner=sq.identity())
+        self.q.save(active)
+        with patch.object(self.q,'allowed_cpus',return_value=[3,7]):
+            next_job,_=self.q.claim()
+        self.assertEqual((next_job['id'],next_job['cpu_ids']),(second,[7]))
+        self.assertNotIn('cpu_ids',self.q.read(first))
+
+    def test_cpu_requests_larger_than_container_fail_without_launch(self):
+        oversized=self.submit('pass\n',options=('--cpus','3'))
+        small=self.submit('pass\n')
+        with patch.object(self.q,'allowed_cpus',return_value=[3,7]):
+            next_job,_=self.q.claim()
+        self.assertEqual(next_job['id'],small)
+        failed=self.q.read(oversized)
+        self.assertEqual((failed['state'],failed['attempt']),('failed',0))
+        self.assertIn('allows 2',failed['error'])
+
+    def test_waiting_large_task_allows_smaller_task_to_use_free_cpu(self):
+        first=self.submit('pass\n',options=('--cpus','2'))
+        waiting=self.submit('pass\n',options=('--cpus','2'))
+        small=self.submit('pass\n')
+        with patch.object(self.q,'allowed_cpus',return_value=[3,7,9]):
+            self.assertEqual(self.q.claim()[0]['id'],first)
+            job,_=self.q.claim()
+        self.assertEqual((job['id'],job['cpu_ids']),(small,[9]))
+        self.assertEqual(self.q.read(waiting)['state'],'queued')
+
+    def test_bad_container_cpu_affinity_is_rejected_before_claim(self):
+        jid=self.submit('pass\n')
+        for output in ('not-json','[]','[true]','[-1]','[2,2]','{}'):
+            with self.subTest(output=output),patch.object(sq.subprocess,'run',
+                 return_value=subprocess.CompletedProcess([],0,stdout=output,stderr='')):
+                with self.assertRaisesRegex(ValueError,'CPU affinity'):self.q.claim()
+                self.assertEqual(self.q.read(jid)['state'],'queued')
 
     def test_reject_paths_outside_mount_and_invalid_resources(self):
         with self.assertRaises(ValueError):self.q.to_container(self.root/'outside.py')

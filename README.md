@@ -46,6 +46,9 @@ A **partition** is a numbered portion of an experiment. A **task** is a
 scheduled execution of a script, optionally assigned a partition. A
 **worker** runs one task at a time. Eight partitions can run through two
 workers; partition count and concurrency are separate choices.
+The scheduler assigns disjoint logical CPU sets to concurrent tasks in the
+same queue and SagePod container. Tasks wait when their requested CPUs are
+occupied. See [CPU assignment and types of parallelism](docs/commands.md#workers).
 
 Keep scripts and their imported project files under `~/Jupyter`:
 
@@ -98,6 +101,10 @@ The defaults are one worker, one CPU per task, a 2048 MiB address-space
 limit per process, and a one-hour wall limit. Workers do not reserve total
 host memory; choose concurrency to fit the machine and notebook workload.
 The [command reference](docs/commands.md) states the resource limits.
+Multiple workers run independent tasks concurrently. Job arrays require
+the script to partition its work; `--cpus N` allows a task's own threads or
+subprocesses to use N assigned CPUs. SageQueue does not parallelize a
+sequential program or combine workers into one shared proof search.
 
 SageQueue sets access and default ACLs for the host account and SagePod
 user automatically. The queue and declared task paths receive the required

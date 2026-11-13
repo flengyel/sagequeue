@@ -35,8 +35,11 @@ def limit():
         n = p['memory_mib']*1024**2
         resource.setrlimit(resource.RLIMIT_AS, (n,n))
     if hasattr(os, 'sched_getaffinity'):
-        available = sorted(os.sched_getaffinity(0))
-        os.sched_setaffinity(0, available[:p['cpus']])
+        available = os.sched_getaffinity(0)
+        assigned = p['cpu_ids']
+        if len(set(assigned)) != p['cpus'] or not set(assigned) <= available:
+            raise ValueError('Assigned CPUs are no longer available in SagePod.')
+        os.sched_setaffinity(0, assigned)
 env = dict(os.environ, **p['environment'])
 # Preserve ordinary script import semantics even when Sage's launcher omits
 # the script directory and the task has an independent working directory.
@@ -46,7 +49,7 @@ existing_pythonpath = env.get('PYTHONPATH', '')
 env['PYTHONPATH'] = script_dir + (os.pathsep+existing_pythonpath if existing_pythonpath else '')
 for k in ('OMP_NUM_THREADS','OPENBLAS_NUM_THREADS','MKL_NUM_THREADS'):
     env[k] = str(p['cpus'])
-atomic('runtime.json', {'pid':os.getpid(), 'token':p['token']})
+atomic('runtime.json', {'pid':os.getpid(), 'token':p['token'], 'cpu_ids':p['cpu_ids']})
 start = time.monotonic()
 child = None
 outcome = 'failed'
@@ -145,6 +148,7 @@ class Queue:
         self.container_uid = None
         self.container_groups = None
         self.queue_shared = False
+        self.cpu_pools = {}
 
     def to_container(self, path):
         path = Path(path).expanduser().resolve()
@@ -338,15 +342,47 @@ class Queue:
             self.start()
         return jobid
 
+    def allowed_cpus(self, job):
+        key = job['container'], job['sage_bin']
+        if key not in self.cpu_pools:
+            code = ('import json,os; print(json.dumps(sorted(os.sched_getaffinity(0)) '
+                    'if hasattr(os,"sched_getaffinity") else list(range(os.cpu_count() or 1))))')
+            result = subprocess.run(['podman','exec',*key,'-python','-c',code],
+                                    capture_output=True,text=True,timeout=20)
+            try:
+                pool = json.loads(result.stdout)
+            except ValueError:
+                pool = None
+            if (result.returncode or not isinstance(pool,list) or not pool or
+                    any(type(cpu) is not int or cpu < 0 for cpu in pool) or len(set(pool)) != len(pool)):
+                raise ValueError('Cannot determine SagePod CPU affinity: '+result.stderr.strip())
+            self.cpu_pools[key] = sorted(pool)
+        return self.cpu_pools[key]
+
     def claim(self):
         with self.locked():
-            for job in self.jobs():
-                job = self.reconcile(job)
+            jobs = [self.reconcile(job) for job in self.jobs()]
+            for job in jobs:
                 orphan = job['state'] == 'running' and identity(job['owner']['pid']) != job['owner']
                 if job['state'] != 'queued' and not orphan:
                     continue
                 if not orphan:
-                    job.update(state='running',attempt=job['attempt']+1,started=stamp(),token=uuid.uuid4().hex)
+                    pool = self.allowed_cpus(job)
+                    if job['cpus'] > len(pool):
+                        job.update(state='failed',finished=stamp(),
+                                   error=f"Requested {job['cpus']} CPUs; container {job['container']!r} allows {len(pool)}.")
+                        self.save(job)
+                        continue
+                    occupied = set()
+                    for active in jobs:
+                        if active['state'] == 'running' and active['container'] == job['container']:
+                            # Older launchers pinned every task to the first N CPUs.
+                            occupied.update(active.get('cpu_ids',pool[:active['cpus']]))
+                    free = [cpu for cpu in pool if cpu not in occupied]
+                    if len(free) < job['cpus']:
+                        continue
+                    job.update(state='running',attempt=job['attempt']+1,started=stamp(),
+                               token=uuid.uuid4().hex,cpu_ids=free[:job['cpus']])
                 job['owner'] = identity()
                 self.save(job)
                 return job, orphan
@@ -379,6 +415,7 @@ class Queue:
                     self.save(current)
                 return
         payload = {k:job[k] for k in ('argv','cwd','cpus','memory_mib','seconds','token','environment')}
+        if not adopted:payload['cpu_ids'] = job['cpu_ids']
         payload.update(attempt_dir=self.to_container(attempt),cancel_file=self.to_container(directory/'cancel'))
         process = None
         if not adopted:
@@ -462,7 +499,7 @@ class Queue:
                 if job['state'] not in TERMINAL-{'done'}:
                     continue
                 (self.path(task).parent/'cancel').unlink(missing_ok=True)
-                for key in ('error','returncode','finished','wall_seconds','cancel_requested'):
+                for key in ('error','returncode','finished','wall_seconds','cancel_requested','cpu_ids'):
                     job.pop(key,None)
                 job.update(state='queued',submitted=stamp())
                 self.save(job);count += 1
