@@ -65,6 +65,21 @@ class QueueTests(unittest.TestCase):
         self.assertEqual(json.loads(log.read_text()),['space here','$(touch bad)','--value=two words'])
         self.assertFalse((self.notebooks/'bad').exists())
 
+    def test_script_imports_local_helpers_from_another_workdir(self):
+        # Reproduce launchers that do not insert the script directory.
+        self.sage.write_text('#!'+sys.executable+'\nimport os,sys\na=sys.argv[1:]\nif a[:1]==["-python"]:a=a[1:]\nos.execv(sys.executable,[sys.executable,"-P"]+a)\n')
+        (self.notebooks/'local_helper.py').write_text('value="local helper"\n')
+        other=self.notebooks/'existing-pythonpath';other.mkdir()
+        (other/'existing_helper.py').write_text('value="existing helper"\n')
+        work=self.notebooks/'separate-workdir';work.mkdir()
+        code='from local_helper import value\nfrom existing_helper import value as other\nimport os,json\nprint(json.dumps([value,other,os.getcwd()]))\n'
+        with patch.dict(os.environ,{'PYTHONPATH':str(other),'PYTHONSAFEPATH':'1'}):
+            jid=self.submit(code,options=('--cwd',str(work)))
+            self.finish(self.worker())
+        self.assertEqual(self.q.read(jid)['state'],'done')
+        log=self.q.path(jid).parent/'attempt-0001/stdout.log'
+        self.assertEqual(json.loads(log.read_text()),['local helper','existing helper',str(work)])
+
     def test_failure_and_retry_keep_attempt_logs(self):
         jid=self.submit('import sys; print("failed attempt"); sys.exit(4)\n')
         self.finish(self.worker());self.assertEqual(self.q.read(jid)['state'],'failed')

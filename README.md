@@ -17,11 +17,28 @@ bin/setup.sh
 sagequeue doctor
 ```
 
-SageQueue needs Python 3.10 or newer, rootless Podman, and the host `acl`
-package on Linux or WSL2. It uses Python's standard library and SagePod's
-existing runtime. Setup
-installs `~/.local/bin/sagequeue`, prepares shared queue ACLs, and checks
-the SagePod connection.
+SageQueue needs Python 3.10 or newer, the host's virtual-environment support
+(`python3-venv` on Debian/Ubuntu), rootless Podman, and the host `acl` package
+on Linux or WSL2. Setup creates the repository's `.venv`, installs
+`~/.local/bin/sagequeue`, prepares shared queue ACLs, and checks the SagePod
+connection. The installed command selects `.venv/bin/python` automatically;
+activation and environment variables are not required.
+
+The host scheduler currently has no third-party Python dependencies;
+[`requirements.txt`](requirements.txt) records this explicitly. To create or
+repair its environment separately, run `bin/venvfix.sh`. Existing environment
+files are retained. Existing workers keep their interpreter until they stop;
+restart workers after changing the host environment.
+
+| Environment | Dependencies and purpose |
+| --- | --- |
+| SageQueue host `.venv` | The scheduler, workers, and ACL helper use Python's standard library. Podman and ACL utilities are host system packages. |
+| SagePod host `.venv` | Compose and its pinned Python dependencies are managed by SagePod's own `requirements.txt` and `venvfix.sh`. |
+| SagePod container | `/sage/sage -python` supplies SageMath and solver packages, including `pycryptosat`. Experiment dependencies belong here. |
+
+Rebuilding either host environment does not install Python packages into the
+container. Local experiment modules must be importable by the experiment's
+entry point when its working directory differs from its source directory.
 
 ## Tasks, partitions, and workers
 
@@ -101,7 +118,7 @@ remove the SagePod container.
 ## Validation
 
 ```bash
-python3 -m unittest discover -s tests -v
+.venv/bin/python -m unittest discover -s tests -v
 sagequeue doctor
 ```
 

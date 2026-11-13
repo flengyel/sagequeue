@@ -1,0 +1,6 @@
+# SageQueue's host scheduler has no third-party Python dependencies.
+# Python 3.10+ supplies all imported host modules through its standard library.
+#
+# Host system dependencies: rootless Podman and the Linux acl utilities.
+# Task runtime: an existing SagePod container supplies Sage and solver packages.
+# SagePod's host Compose packages belong to SagePod's separate requirements.txt.

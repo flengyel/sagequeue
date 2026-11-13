@@ -5,7 +5,8 @@ command -v python3 >/dev/null
 command -v podman >/dev/null
 command -v setfacl >/dev/null || { echo 'Install the host acl package first.' >&2; exit 1; }
 command -v getfacl >/dev/null || { echo 'Install the host acl package first.' >&2; exit 1; }
-python3 "$ROOT/sagequeue.py" doctor
+bash "$ROOT/bin/venvfix.sh"
+"$ROOT/.venv/bin/python" "$ROOT/sagequeue.py" doctor
 mkdir -p "$HOME/.local/bin"
 chmod +x "$ROOT/bin/sagequeue"
 ln -sfn "$ROOT/bin/sagequeue" "$HOME/.local/bin/sagequeue"

@@ -38,6 +38,12 @@ def limit():
         available = sorted(os.sched_getaffinity(0))
         os.sched_setaffinity(0, available[:p['cpus']])
 env = dict(os.environ, **p['environment'])
+# Preserve ordinary script import semantics even when Sage's launcher omits
+# the script directory and the task has an independent working directory.
+script_index = 2 if p['argv'][1:2] == ['-python'] else 1
+script_dir = str(Path(p['argv'][script_index]).parent)
+existing_pythonpath = env.get('PYTHONPATH', '')
+env['PYTHONPATH'] = script_dir + (os.pathsep+existing_pythonpath if existing_pythonpath else '')
 for k in ('OMP_NUM_THREADS','OPENBLAS_NUM_THREADS','MKL_NUM_THREADS'):
     env[k] = str(p['cpus'])
 atomic('runtime.json', {'pid':os.getpid(), 'token':p['token']})

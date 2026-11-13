@@ -1,0 +1,31 @@
+{
+  "artifact_sha256": {
+    "bin/sagequeue": "373b230edb2476e2019fc99813fb10b417160aa97a5b555e6ca681747693ecf1",
+    "bin/setup.sh": "f4a3921cd7b4251d9d41cd46c2d1e5a844e7e1b92d63f995da60e66a1b607ad2",
+    "bin/venvfix.sh": "e47fd21ff8e570d077528408065ed6073237f955c1ad812885c4d33a01683616",
+    "requirements.txt": "321f6207159e40bc3bdf8823ce8e5b171c496c8c8443ce8e7d65a7cc67fdcb31",
+    "sagequeue.py": "8cf0b8832df1c001d07d7559fca5f5da0ad83d90723e3fd7c02991019ad7a1c8",
+    "tests/test_environment.py": "615b0de066617ba6053fa98919da410b872e6aa7d7ca149bba3f8391ba3c17aa",
+    "tests/test_queue.py": "f87b36d370823af0c4138fb09e94b69d3527d144ff624ab83fb376ea1124a184"
+  },
+  "checks": [
+    "Virtual-environment creation and pip check with no third-party requirements",
+    "Installed symlink selects repository .venv and forwards literal arguments",
+    "Repair retains existing environment files",
+    "Missing environment reports setup command",
+    "Queued Python job imports local and existing-path helpers from a separate cwd under safe-path Python",
+    "Existing worker, retry, array, timeout, permission-model and recovery regressions"
+  ],
+  "format": "sagequeue-environment-validation-v1",
+  "live_sagepod_tested_for_this_fix": false,
+  "passed": 34,
+  "python": "3.12.14",
+  "shell_syntax": "bash -n bin/setup.sh bin/venvfix.sh passed",
+  "skipped": 3,
+  "skipped_checks": [
+    "GNU setfacl syntax check: utility unavailable",
+    "Two native ACL checks: utilities unavailable"
+  ],
+  "test_environment": "repository .venv; host command execution and isolated local virtual-environment fixtures",
+  "tests": 37
+}

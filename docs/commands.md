@@ -3,6 +3,12 @@
 The main commands are `tasks`, `partitions`, and `workers`. Global options
 precede them. Task options precede the script; script arguments follow it.
 
+The installed command uses the checkout's `.venv/bin/python`; no activation
+is needed. `bin/setup.sh` creates that host environment from
+`requirements.txt`, and `bin/venvfix.sh` repairs it. Task scripts run in
+SagePod's Sage environment, independently of both projects' host virtual
+environments. Host requirements do not install packages into SagePod.
+
 ## Tasks
 
 ```bash
@@ -24,6 +30,10 @@ directory on the notebook mount. Python scripts use `/sage/sage -python`;
 Sage scripts use `/sage/sage`. Script arguments are passed literally,
 without shell evaluation. Absolute arguments under `~/Jupyter` are mapped
 to SagePod paths. Relative arguments resolve against the task directory.
+The launcher prepends the script's directory to the container's Python
+import path and retains existing Python import paths. Local helper modules
+therefore remain importable when `--cwd` selects a separate result directory.
+This requires no environment variables in the submission command.
 
 The `--launch` option reads container-launcher diagnostics. If a failed task
 has no output, the log command also shows its recorded error and available
