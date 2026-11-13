@@ -42,6 +42,24 @@ For an existing experiment checkpoint, pass its explicit `--state_file`
 path rather than relying on a generated default filename. Check the saved
 partition assignment before resuming.
 
+## Removed wrappers
+
+SageQueue no longer ships `man-up.sh`, `man-down.sh`, or `run-bash.sh`.
+The first two had become worker-command aliases after container management
+moved to SagePod. Use these replacements:
+
+| Former SageQueue script | Replacement |
+| --- | --- |
+| `./man-up.sh` | `sagequeue workers start` |
+| `./man-down.sh` | `sagequeue workers stop` |
+| `./run-bash.sh` | Run `./run-bash.sh` from the SagePod checkout. |
+
+Start and stop the container using SagePod's own `man-up.sh` and
+`man-down.sh`. Stopping queue workers lets their current tasks finish;
+stopping the SagePod container interrupts the computations inside it.
+SageQueue's `bin/venvfix.sh` remains responsible for its own host Python
+environment.
+
 ## Remove an unused container
 
 After confirming no experiment or notebook still uses container `sagemath`,

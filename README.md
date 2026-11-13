@@ -121,6 +121,10 @@ Workers run in the background or under the supplied
 [user-service template](systemd/sagequeue-worker@.service). SagePod must be
 running before workers start. Queue commands do not build, restart, or
 remove the SagePod container.
+Use SagePod's own commands for container startup, shutdown, and an
+interactive container shell. Use `sagequeue workers start` and
+`sagequeue workers stop` to control queue workers. The former convenience
+wrappers were removed; see [command replacements](docs/migration.md#removed-wrappers).
 
 ## Validation
 
