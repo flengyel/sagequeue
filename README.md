@@ -71,7 +71,7 @@ environment variables. See [commands](docs/commands.md).
 | `sagequeue workers [status]` | Inspect worker slots. |
 | `sagequeue workers start --workers N` | Start worker slots. |
 | `sagequeue workers stop` | Stop workers after their current tasks. |
-| `sagequeue doctor` | Check SagePod and solver versions. |
+| `sagequeue doctor` | Check SagePod, queue-directory access, and solver versions. |
 
 ## Resource controls and recovery
 
@@ -100,6 +100,8 @@ sagequeue doctor
 
 Automated tests use a process-level Podman substitute for task submission,
 arrays, cancellation, timeouts, concurrent claims, retries, and worker
-recovery. The `doctor` command checks the installed SagePod runtime.
+recovery. The `doctor` command checks the installed SagePod runtime and write access
+to the queue directory. Launcher diagnostics are available with
+`tasks logs ID --launch`.
 
 [Migration guide](docs/migration.md) · [License](LICENSE)

@@ -13,6 +13,7 @@ sagequeue tasks
 sagequeue tasks status 1 --json
 sagequeue tasks logs 1 --follow
 sagequeue tasks logs 1 --stderr
+sagequeue tasks logs 1 --launch
 sagequeue tasks cancel 1
 sagequeue tasks retry 1
 ```
@@ -23,6 +24,10 @@ directory on the notebook mount. Python scripts use `/sage/sage -python`;
 Sage scripts use `/sage/sage`. Script arguments are passed literally,
 without shell evaluation. Absolute arguments under `~/Jupyter` are mapped
 to SagePod paths. Relative arguments resolve against the task directory.
+
+The `--launch` option reads container-launcher diagnostics. If a failed task
+has no output, the log command also shows its recorded error and available
+error/launcher output.
 
 Logs belong to individual tasks. Each retry creates a new attempt and
 retains prior output. Retrying an array queues only its failed, cancelled,
@@ -109,3 +114,16 @@ sagequeue --root ~/Jupyter/other-queue --container sagepod tasks
 
 `--notebooks`, `--container-notebooks`, and `--sage-bin` select a different
 existing mount or Sage executable. SageQueue does not alter SagePod.
+
+## Shared-directory access
+
+SagePod's mapped user must be able to traverse the queue's parent directories
+and write the queue directory. Worker startup and `doctor` check this access
+inside SagePod before tasks are claimed. The queue does not change ownership
+or permissions automatically.
+
+Create test directories with `mkdir` under the configured notebook mount so
+that its shared default permissions can be inherited. A private directory
+created by `mktemp -d` normally has mode 0700 and may block the container user.
+When startup fails, inspect the path and permission error reported by
+`doctor`; task launch diagnostics are available with `tasks logs ID --launch`.

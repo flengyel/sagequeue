@@ -199,6 +199,18 @@ class Queue:
         if result.returncode or result.stdout.strip() != 'true':
             raise ValueError(f'SagePod container {self.args.container!r} is not running. Start SagePod first.')
 
+    def probe_access(self):
+        code = ('import sys,tempfile\n'
+                'with tempfile.TemporaryFile(dir=sys.argv[1]) as f:\n'
+                '    f.write(b"sagequeue mount check"); f.flush()\n')
+        remote = self.to_container(self.root)
+        result = subprocess.run(['podman','exec',self.args.container,self.args.sage_bin,
+                                 '-python','-c',code,remote],capture_output=True,text=True,timeout=30)
+        if result.returncode:
+            details = result.stderr.strip() or result.stdout.strip() or f'exit {result.returncode}'
+            raise ValueError('SagePod cannot write the queue directory '+remote+'. '
+                             'Check permissions on that directory and its ancestors.\n'+details)
+
     def worker_command(self, slot):
         return [sys.executable, str(Path(__file__).resolve()), '--root',str(self.root),
                 '--notebooks',str(self.notebooks), '--container-notebooks',self.args.container_notebooks,
@@ -209,6 +221,7 @@ class Queue:
         if workers < 1:
             raise ValueError('Use at least one worker.')
         self.probe()
+        self.probe_access()
         (self.root/'workers.stop').unlink(missing_ok=True)
         for slot in range(workers):
             with (self.root/f'worker-{slot}.log').open('ab') as log:
@@ -357,6 +370,7 @@ class Queue:
             atomic(self.root/f'worker-{args.slot}.json',identity())
             signal.signal(signal.SIGTERM,stop)
             signal.signal(signal.SIGINT,stop)
+            self.probe_access()
             while not stopping and not (self.root/'workers.stop').exists():
                 self.probe()
                 job, adopted = self.claim()
@@ -420,7 +434,8 @@ class Queue:
         while True:
             job = self.read(args.id)
             if job['attempt']:
-                file = self.path(args.id).parent/f"attempt-{job['attempt']:04d}"/('stderr.log' if args.stderr else 'stdout.log')
+                name = 'launch.log' if args.launch else 'stderr.log' if args.stderr else 'stdout.log'
+                file = self.path(args.id).parent/f"attempt-{job['attempt']:04d}"/name
                 if file.exists():
                     with file.open('rb') as stream:
                         stream.seek(position); data=stream.read(); position=stream.tell()
@@ -428,6 +443,17 @@ class Queue:
             with self.locked():
                 job = self.reconcile(self.read(args.id))
             if not args.follow or job['state'] in TERMINAL:
+                if position == 0 and job['state'] == 'failed' and not args.launch:
+                    if job.get('error'):
+                        print('Task '+str(args.id)+': '+job['error'],flush=True)
+                    attempt = self.path(args.id).parent/f"attempt-{job['attempt']:04d}"
+                    for name in ('stderr.log','launch.log'):
+                        path = attempt/name
+                        if path.exists() and path.stat().st_size:
+                            print('--- '+name+' ---',flush=True)
+                            with path.open('rb') as stream:
+                                stream.seek(max(0,path.stat().st_size-65536))
+                                sys.stdout.buffer.write(stream.read());sys.stdout.buffer.flush()
                 break
             time.sleep(0.25)
 
@@ -465,7 +491,10 @@ def task_parsers(sub):
     s=sub.add_parser('status',aliases=['jobs'],help='List tasks and their states.')
     s.add_argument('ids',nargs='*');s.add_argument('--json',action='store_true')
     s=sub.add_parser('logs',help='Read a task output log.')
-    s.add_argument('id');s.add_argument('-f','--follow',action='store_true');s.add_argument('--stderr',action='store_true')
+    s.add_argument('id');s.add_argument('-f','--follow',action='store_true')
+    stream=s.add_mutually_exclusive_group()
+    stream.add_argument('--stderr',action='store_true')
+    stream.add_argument('--launch',action='store_true',help='Read the container launcher log.')
     for action in ('cancel','retry'):
         s=sub.add_parser(action);s.add_argument('id')
 
@@ -525,6 +554,7 @@ def main(argv=None):
                 print(path.stem.removeprefix('worker-'), 'running' if held else 'stopped',data.get('pid','-'))
         elif action=='doctor':
             q.probe()
+            q.probe_access()
             code='from sage.env import SAGE_VERSION; import pycryptosat; print("Sage",SAGE_VERSION,"CryptoMiniSat",pycryptosat.__version__)'
             return subprocess.call(['podman','exec',args.container,args.sage_bin,'-python','-c',code])
         return 0

@@ -148,5 +148,24 @@ class QueueTests(unittest.TestCase):
         for command in (['tasks'],['tasks','status'],['partitions',str(jid)],['workers']):
             with contextlib.redirect_stdout(io.StringIO()):self.assertEqual(sq.main(self.base+command),0)
 
+    def test_unwritable_mount_is_rejected_before_worker_start(self):
+        result=subprocess.CompletedProcess([],1,stdout='',stderr='PermissionError: queue parent is private')
+        with patch.object(sq.subprocess,'run',return_value=result):
+            with self.assertRaisesRegex(ValueError,'cannot write the queue directory'):
+                self.q.probe_access()
+        self.assertFalse((self.q.root/'worker-0.json').exists())
+
+    def test_launch_log_can_be_read_and_is_failed_task_fallback(self):
+        jid=self.submit('pass\n')
+        job=self.q.read(jid);job.update(state='failed',attempt=1,error='Runtime disappeared without a completion record.')
+        self.q.save(job)
+        attempt=self.q.path(jid).parent/'attempt-0001';attempt.mkdir()
+        (attempt/'launch.log').write_text('PermissionError: private test directory\n')
+        for options in ([],['--launch'],['--stderr']):
+            p=subprocess.run([sys.executable,str(ROOT/'sagequeue.py'),*self.base,
+                              'tasks','logs',str(jid),*options],capture_output=True,text=True)
+            self.assertEqual(p.returncode,0,p.stderr)
+            self.assertIn('PermissionError: private test directory',p.stdout)
+
 
 if __name__=='__main__':unittest.main()
