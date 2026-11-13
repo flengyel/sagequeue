@@ -131,6 +131,8 @@ SageQueue prepares ACLs automatically during submission, worker startup,
 and `doctor`. It reads SagePod's configured numeric user ID and runs its
 ACL helper in Podman's rootless user namespace. The host account and the
 SagePod user receive the access needed for queue records and task files.
+The helper uses the container's actual group IDs when preserving access
+that previously came from group ACL entries.
 The host `acl` package supplies `setfacl` and `getfacl`.
 
 The repair covers:
@@ -140,7 +142,7 @@ The repair covers:
 - Default ACLs on queue directories, so new records and directories inherit
   shared access.
 - Access and default ACLs on the task's declared working directory, plus
-  read access to its script.
+  read access to its script and read/search access to the script directory.
 - Traversal of the necessary ancestors within the notebook mount.
 
 The queue tree is repaired on first use. Its permission record avoids a
@@ -149,11 +151,30 @@ launch. `doctor` also repairs existing queue files. This handles private
 test directories created with `mktemp -d`.
 
 Ownership and file contents are preserved. Existing effective permissions
-for other principals are preserved when the ACL mask is enlarged. The
+are preserved when named-user entries are introduced or the ACL mask is
+enlarged. A matching named-user entry overrides group and `other` access;
+the helper retains the user's previous effective grant before adding the
+requested bits. Existing traversal-only entries on the script directory
+are upgraded to read/search, because Python lists that directory to find
+local modules even when it is explicitly present in `sys.path`. Other
+ancestors receive only the additional search access they need. The
 helper skips queue-tree symlinks and rejects requested paths outside the
 configured notebook mount. It does not recursively change other project
 files or the whole notebook tree. Arbitrary additional input/output paths
 belong to the submitted program's file-access requirements.
+Local helper files must already be readable by the container user; the
+script-directory repair does not recursively grant access to project files.
+
+For the opt-in regression against a running SagePod and its real ACLs:
+
+```bash
+SAGEQUEUE_LIVE_NOTEBOOKS="$HOME/Jupyter" .venv/bin/python -m unittest discover -s tests -v
+```
+
+This uses a disposable directory and its own held queue, with separate
+source and result directories. It checks ordinary readable directories,
+group-granted access, existing traversal-only user entries, local imports,
+and preservation of private ancestors and unrelated paths.
 
 If ACL preparation fails, the command reports the path or missing tool.
 Tasks are not launched before shared queue access is checked. Use

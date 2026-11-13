@@ -143,6 +143,7 @@ class Queue:
         (self.root/'jobs').mkdir(exist_ok=True)
         (self.root/'arrays').mkdir(exist_ok=True)
         self.container_uid = None
+        self.container_groups = None
         self.queue_shared = False
 
     def to_container(self, path):
@@ -221,10 +222,18 @@ class Queue:
                 if result.returncode or not user.isdigit():
                     raise ValueError('Cannot determine SagePod\'s numeric user ID.')
             self.container_uid=int(user)
+        if self.container_groups is None:
+            result=subprocess.run(['podman','exec',self.args.container,'id','-G'],
+                                  capture_output=True,text=True,timeout=15)
+            groups=result.stdout.split()
+            if result.returncode or not groups or not all(g.isdigit() for g in groups):
+                raise ValueError('Cannot determine SagePod\'s numeric group IDs: '+result.stderr.strip())
+            self.container_groups=sorted(set(map(int,groups)))
         if self.queue_shared and workdir is None and script is None and tree is None and not force:
             return
         command=['podman','unshare',sys.executable,str(Path(__file__).with_name('queue_acl.py')),
                  '--boundary',str(self.notebooks),'--queue',str(self.root),'--uid',str(self.container_uid)]
+        for gid in self.container_groups:command.extend(('--gid',str(gid)))
         for flag,value in (('--workdir',workdir),('--script',script),('--tree',tree)):
             if value is not None:command.extend((flag,str(value)))
         if force:command.append('--force')

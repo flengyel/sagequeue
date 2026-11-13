@@ -65,6 +65,40 @@ class ACLTests(unittest.TestCase):
         self.assertEqual(updated[(False,'user','1000')],1)
         self.assertEqual(updated[(False,'other','')],0)
 
+    def test_new_named_user_preserves_other_access(self):
+        initial=acl.parse_acl('user::rwx\ngroup::r-x\nother::r-x\n')
+        updated=acl.merge_acl(initial,0,{0:1,1000:1})
+        self.assertEqual(updated[(False,'user','1000')],5)
+
+    def test_new_named_user_preserves_only_matching_group_access(self):
+        initial=acl.parse_acl('user::rwx\ngroup::rwx\ngroup:44:r--\ngroup:55:rwx\nmask::r-x\nother::-w-\n')
+        for groups,expected in (({44},5),({20},5),({66},3),({44,20},5)):
+            with self.subTest(groups=groups):
+                updated=acl.merge_acl(initial,0,{1000:1},user_groups={1000:groups},owning_group=20)
+                self.assertEqual(updated[(False,'user','1000')],expected)
+                self.assertEqual(updated[(False,'group','55')],5)
+        # A matching group with no effective rights prevents fallback to other.
+        initial=acl.parse_acl('user::rwx\ngroup::---\nother::rwx\n')
+        updated=acl.merge_acl(initial,0,{1000:1},user_groups={1000:{20}},owning_group=20)
+        self.assertEqual(updated[(False,'user','1000')],1)
+
+    def test_existing_named_user_does_not_gain_other_or_group_rights(self):
+        initial=acl.parse_acl('user::rwx\nuser:1000:--x\ngroup::rwx\nmask::rwx\nother::rwx\n')
+        updated=acl.merge_acl(initial,0,{1000:1},user_groups={1000:{20}},owning_group=20)
+        self.assertEqual(updated[(False,'user','1000')],1)
+
+    def test_separate_script_directory_repairs_traversal_only_entry(self):
+        project=self.private/'source';project.mkdir(mode=0o700)
+        script=project/'run.py';script.write_text('import local_helper\n');script.chmod(0o600)
+        helper=project/'local_helper.py';helper.write_text('value=42\n');helper.chmod(0o644)
+        self.model.values[project]=acl.parse_acl('user::rwx\nuser:1000:--x\ngroup::---\nmask::--x\nother::---\n')
+        acl.repair(self.notebooks,self.queue,1000,self.private,script)
+        entries=self.model.values[project]
+        self.assertEqual(entries[(False,'user','1000')],5)
+        self.assertFalse(any(key[0] for key in entries))
+        self.assertNotIn(helper,self.model.changed)
+        self.assertEqual(self.model.values[self.notebooks][(False,'user','1000')],1)
+
     def test_script_read_access_and_workdir_defaults_are_scoped(self):
         project=self.private/'project';project.mkdir(mode=0o700)
         script=project/'run.py';script.write_text('pass\n');script.chmod(0o600)
@@ -155,6 +189,17 @@ class NativeACLTests(unittest.TestCase):
         entries=self.read(self.private)
         self.assertEqual(entries[(False,'user','65533')]&entries[(False,'mask','')],0)
         self.assertEqual(before,(self.private.stat().st_uid,self.private.stat().st_gid))
+
+    def test_new_named_user_keeps_readable_directory_access(self):
+        source=self.private/'source';source.mkdir(mode=0o755)
+        script=source/'run.py';script.write_text('pass\n')
+        acl.repair(self.notebooks,self.queue,65534,self.private,script)
+        entries=self.read(source)
+        self.assertEqual(entries[(False,'user','65534')]&entries[(False,'mask','')],5)
+        subprocess.run(['setfacl','-m','u:65534:--x',str(source)],check=True)
+        acl.repair(self.notebooks,self.queue,65534,self.private,script)
+        entries=self.read(source)
+        self.assertEqual(entries[(False,'user','65534')]&entries[(False,'mask','')],5)
 
 
 class GNUACLTextTests(unittest.TestCase):

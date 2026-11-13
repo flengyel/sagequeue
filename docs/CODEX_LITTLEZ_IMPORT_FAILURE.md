@@ -1,5 +1,104 @@
 # Diagnose the queued SagePod import failure on LITTLEZ
 
+## Completed live repair, 2026-11-13
+
+The diagnosis and acceptance checks below were completed on LITTLEZ. The
+repair is in SageQueue's ACL helper; the proof engine, source axioms,
+solver versions, and environments were retained.
+
+### Measured cause and permission change
+
+Before editing, the normal `sagepod` user was UID/GID `1000:1000`.
+Both `podman unshare` and the container reported the same mappings:
+namespace ID 0 maps to host ID 1000 (one ID), and namespace IDs
+1–65536 map to host IDs 100000–165535. Container UID 1000 is therefore
+host UID 100999. Sage's Python was
+`/sage/local/var/lib/sage/venv-python3.13/bin/python3`, with prefix
+`/sage/local/var/lib/sage/venv-python3.13`; `PYTHONPATH` was unset during
+the diagnostic probe from `/home/sage/notebooks/fcpc-runs`.
+
+The proof source directory had `user:1000:--x`, despite group 1000
+having `rwx`. `os.access` reported read false and search true;
+`os.listdir` raised `PermissionError`. Both `syntax.py` and `equality.py`
+were readable by direct open, but `find_spec` returned `None` and imports
+raised `ModuleNotFoundError` after explicitly adding the correct directory.
+The named-user entry shadowed the otherwise sufficient group grant.
+
+The before/after numeric ACL comparison of the ten original inspected
+paths changed exactly one entry:
+
+```text
+Free-Classical-Proof-Categories/experiments/involutivity/proof_search/sat
+user:1000:--x -> user:1000:r-x
+```
+
+Ownership, masks, defaults, ancestor ACLs, the inspected script/module
+ACLs, and `fcpc-runs` ACLs in that comparison were unchanged. The model
+checker submission also prepared its own `source` directory for
+read/search. Python then listed the proof directory and imported both
+modules successfully as the normal SagePod user from the original cwd.
+
+The helper now preserves a user's previous effective access before adding
+a named entry, using the container's actual group IDs and POSIX ACL
+precedence. Only the script's containing directory requires the additional
+read/search grant; other ancestors retain their existing access plus
+search where necessary. Imported files already had sufficient read access.
+
+### Reproduction and verification
+
+An isolated layout under `~/Jupyter/sagequeue-import-acl-repro`, with
+separate source/result directories, reproduced the defect before the fix.
+Held submission of job 2 changed an ordinary `0755` source directory from
+readable/importable to traversal-only with no module spec. A pre-existing
+`user:1000:--x` entry remained broken after held submission of job 3.
+Both jobs subsequently ran successfully with the repaired worker.
+
+The real repository `.venv` passed 44 tests in 56.775 seconds, with no
+skips. This included native ACL checks and an opt-in test using the real
+SagePod user, ordinary and group-granted access, an existing traversal-only
+entry, separate cwd, directory listing, local imports, private ancestors,
+symlinks, and unrelated private files. The actual container passed all
+28 source tests in 27.296 seconds and its 14 proof tests in 5.927 seconds;
+two optional-backend subtests were skipped because `python-sat` is absent.
+The CryptoMiniSat path and existing import-path regressions passed.
+
+All acceptance jobs used SageQueue and SagePod with the separate
+`fcpc-runs` cwd:
+
+| Job | Observation |
+| --- | --- |
+| 4 | Positive ground-associativity control: `proved`, six source instances, one equality lemma, two solver calls. |
+| 7 | Standalone replay of job 4's certificate: `checked`, seven steps. |
+| 5 | Boolean/cyclic-three model control: `model_verified`, two objects, nine morphisms, 10,799 checked instances; no counterexample. |
+| 6 | Complete source, short budget: stopped by its stop file; `paused`, 61 instances, round 0, rule cursor 11. |
+| 8 | Resumed job 6's checkpoint with identical source/engine specification and the saved instance prefix intact: `open` at the 800-instance limit, rule cursor 95, candidate cursor 10, one solver call. |
+| 1, attempt 3 | Retried with its original argv/cwd/resources. At 14:13:09–14:13:13 UTC its saved frontier advanced from 70 to 1,423 to 1,935 instances, with one solver call; running, empty stderr. |
+
+The short run used term bound 8192, batch size 32, instance limit 400,
+four rounds, 45 seconds, three solver seconds and 1024 MiB. Resume raised
+the instance limit to 800 and round limit to six, with 20 seconds. Its
+termination is a launch/control result, with no proof or countermodel
+claim for the involution target.
+
+The initial queue tree, both attempt logs, process command lines, numeric
+ACL snapshots, and checkpoint observations were preserved under
+`/tmp/littlez-import-evidence`. Acceptance output is under
+`~/Jupyter/fcpc-runs/import-repair-*`; job 1 retains
+`~/Jupyter/fcpc-runs/littlez-proof`. Queue records and generated formulas
+are excluded from repository commits. The installed command resolves to
+`~/src/sagequeue/bin/sagequeue` and selects its repository `.venv`.
+Worker 0 (PID 473969) was requested to stop and verified stopped before
+editing. Each temporary worker was likewise verified stopped before the
+next stage; the final worker was left running for job 1.
+
+Baseline repository HEADs were SageQueue
+`413c2e36354ab8c3816441974ec5f2b0c791ca8a`, proof-category source
+`12b9904e6efaeaac6db65e153b2f1af39ba39f5e`, and SagePod
+`4bc1bc364589777e8baa27bfc687d158310d71a5`. SagePod's three pre-existing
+untracked files were preserved.
+
+The original investigation and acceptance requirements follow.
+
 Reproduce and fix the failed proof-search launch in the live SagePod
 environment. Work from `~/src/sagequeue`; also inspect
 `~/Jupyter/Free-Classical-Proof-Categories` and, when necessary,

@@ -174,12 +174,21 @@ class QueueTests(unittest.TestCase):
 
     def test_container_uid_is_discovered_from_configuration(self):
         def command(args,**kwargs):
-            return subprocess.CompletedProcess(args,0,stdout='2345:2345\n' if 'inspect' in args else '',stderr='')
+            output='2345:2345\n' if 'inspect' in args else '2345 77\n' if args[-2:]==['id','-G'] else ''
+            return subprocess.CompletedProcess(args,0,stdout=output,stderr='')
         with patch.object(sq.subprocess,'run',side_effect=command) as run:
             self.q.share()
         self.assertEqual(self.q.container_uid,2345)
         args=run.call_args.args[0]
         self.assertEqual(args[args.index('--uid')+1],'2345')
+        self.assertEqual(self.q.container_groups,[77,2345])
+        self.assertIn('--gid',args)
+
+    def test_missing_container_group_ids_fail_before_acl_mutation(self):
+        self.q.container_uid=2345
+        with patch.object(sq.subprocess,'run',return_value=subprocess.CompletedProcess([],0,stdout='',stderr='')) as run:
+            with self.assertRaisesRegex(ValueError,'numeric group IDs'):self.q.share()
+        self.assertEqual(run.call_count,1)
 
     def test_outside_queue_is_rejected_without_creating_directory(self):
         outside=self.root/'outside-queue'
